@@ -175,7 +175,7 @@ struct ActiveDiscoEasterEgg {
   Uint32 frozen_started_ticks = 0;
   Uint32 last_rotation_update_ticks = 0;
   double rotation_phase_turns = 0.0;
-  double rotation_speed_scale = 1.0;
+  double rotation_speed_scale = DISCO_ROTATION_SPEED_MIN;
   int animation_seed = 0;
   bool is_active = false;
   bool is_ending = false;

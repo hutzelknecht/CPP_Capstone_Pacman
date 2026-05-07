@@ -2745,7 +2745,7 @@ void Game::StartDiscoEasterEgg(Uint32 now) {
   active_disco_easteregg.frozen_started_ticks = now;
   active_disco_easteregg.last_rotation_update_ticks = now;
   active_disco_easteregg.rotation_phase_turns = 0.0;
-  active_disco_easteregg.rotation_speed_scale = 1.0;
+  active_disco_easteregg.rotation_speed_scale = DISCO_ROTATION_SPEED_MIN;
   active_disco_easteregg.animation_seed =
       static_cast<int>((now % DISCO_EASTER_EGG_ANIMATION_SEED_MODULUS) +
                        pacman->map_coord.u *

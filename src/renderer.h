@@ -235,6 +235,10 @@ private:
   void drawPanel(const SDL_Rect &panel, const SDL_Color &fill_color,
                  const SDL_Color &border_color);
   void drawStartMenuSpectrum(const SDL_Rect &panel);
+  void drawStartMenuSpectrumGlassBlocks(const SDL_Rect &panel);
+  void drawGlassBlock(const SDL_Rect &block_rect, const SDL_Color &color,
+                      float lit_amount);
+  void ensureGlassBlockTextures(int block_w, int block_h);
   void drawStartMenuOverlay(int selected_item,
                             const std::string &map_name,
                             const std::string &status_message);
@@ -399,6 +403,10 @@ private:
   int sdl_soft_puff_texture_size = 0;
   SDL_Texture *sdl_solid_disc_texture = nullptr;
   int sdl_solid_disc_texture_size = 0;
+  SDL_Texture *sdl_glass_block_base_texture = nullptr;
+  SDL_Texture *sdl_glass_block_glow_texture = nullptr;
+  int sdl_glass_block_texture_w = 0;
+  int sdl_glass_block_texture_h = 0;
 
   TTF_Font *sdl_font_hud;
   TTF_Font *sdl_font_menu;

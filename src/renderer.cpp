@@ -947,6 +947,14 @@ Renderer::~Renderer() {
     SDL_DestroyTexture(sdl_solid_disc_texture);
     sdl_solid_disc_texture = nullptr;
   }
+  if (sdl_glass_block_base_texture != nullptr) {
+    SDL_DestroyTexture(sdl_glass_block_base_texture);
+    sdl_glass_block_base_texture = nullptr;
+  }
+  if (sdl_glass_block_glow_texture != nullptr) {
+    SDL_DestroyTexture(sdl_glass_block_glow_texture);
+    sdl_glass_block_glow_texture = nullptr;
+  }
   if (sdl_renderer != nullptr) {
     SDL_DestroyRenderer(sdl_renderer);
   }
@@ -3076,6 +3084,11 @@ void Renderer::drawStartMenuSpectrum(const SDL_Rect &panel) {
     return;
   }
 
+#ifdef START_MENU_SPECTRUM_GLASS_BLOCKS
+  drawStartMenuSpectrumGlassBlocks(panel);
+  return;
+#endif
+
   const int outer_margin = std::max(0, START_MENU_SPECTRUM_OUTER_MARGIN);
   const int top_y = panel.y;
   const int bottom_y = panel.y + panel.h - 1;
@@ -3239,6 +3252,432 @@ void Renderer::drawStartMenuSpectrum(const SDL_Rect &panel) {
 
   draw_curve_surface(true);
   draw_curve_surface(false);
+}
+
+void Renderer::ensureGlassBlockTextures(int block_w, int block_h) {
+  if (sdl_renderer == nullptr || block_w <= 0 || block_h <= 0) {
+    return;
+  }
+  if (sdl_glass_block_base_texture != nullptr &&
+      sdl_glass_block_glow_texture != nullptr &&
+      sdl_glass_block_texture_w == block_w &&
+      sdl_glass_block_texture_h == block_h) {
+    return;
+  }
+  if (sdl_glass_block_base_texture != nullptr) {
+    SDL_DestroyTexture(sdl_glass_block_base_texture);
+    sdl_glass_block_base_texture = nullptr;
+  }
+  if (sdl_glass_block_glow_texture != nullptr) {
+    SDL_DestroyTexture(sdl_glass_block_glow_texture);
+    sdl_glass_block_glow_texture = nullptr;
+  }
+  sdl_glass_block_texture_w = 0;
+  sdl_glass_block_texture_h = 0;
+
+  // Supersample so the rounded corner / bevel anti-aliases cleanly when SDL's
+  // linear filter scales the texture down to the on-screen block size.
+  constexpr int kSupersample = 4;
+  const int tex_w = block_w * kSupersample;
+  const int tex_h = block_h * kSupersample;
+  const float corner_radius =
+      static_cast<float>(START_MENU_SPECTRUM_GLASS_CORNER_RADIUS_PX) *
+      static_cast<float>(kSupersample);
+  const float bevel_width = std::max(
+      1.0f, static_cast<float>(START_MENU_SPECTRUM_GLASS_EDGE_BEVEL_PX) *
+                static_cast<float>(kSupersample));
+  const float half_w = static_cast<float>(tex_w) * 0.5f;
+  const float half_h = static_cast<float>(tex_h) * 0.5f;
+  const float clamped_corner =
+      std::min(corner_radius, std::min(half_w, half_h) - 0.5f);
+
+  auto rounded_rect_sdf = [&](float px, float py) -> float {
+    const float qx = std::abs(px - half_w) - (half_w - clamped_corner);
+    const float qy = std::abs(py - half_h) - (half_h - clamped_corner);
+    const float ax = std::max(qx, 0.0f);
+    const float ay = std::max(qy, 0.0f);
+    const float inside = std::min(std::max(qx, qy), 0.0f);
+    return std::sqrt(ax * ax + ay * ay) + inside - clamped_corner;
+  };
+
+  // Light direction for the bevel highlight (top-left, slightly above).
+  constexpr float kLightX = -0.5f;
+  constexpr float kLightY = -0.5f;
+  constexpr float kLightZ = 0.7071f;
+  const float light_len =
+      std::sqrt(kLightX * kLightX + kLightY * kLightY + kLightZ * kLightZ);
+  const float lx = kLightX / light_len;
+  const float ly = kLightY / light_len;
+  const float lz = kLightZ / light_len;
+  // Halfway vector between light and view (view = +z), used for specular.
+  const float hx_raw = lx;
+  const float hy_raw = ly;
+  const float hz_raw = lz + 1.0f;
+  const float h_len =
+      std::sqrt(hx_raw * hx_raw + hy_raw * hy_raw + hz_raw * hz_raw);
+  const float hx = hx_raw / h_len;
+  const float hy = hy_raw / h_len;
+  const float hz = hz_raw / h_len;
+
+  SDL_Surface *base_surface = SDL_CreateRGBSurfaceWithFormat(
+      0, tex_w, tex_h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *glow_surface = SDL_CreateRGBSurfaceWithFormat(
+      0, tex_w, tex_h, 32, SDL_PIXELFORMAT_RGBA32);
+  if (base_surface == nullptr || glow_surface == nullptr) {
+    if (base_surface != nullptr) {
+      SDL_FreeSurface(base_surface);
+    }
+    if (glow_surface != nullptr) {
+      SDL_FreeSurface(glow_surface);
+    }
+    return;
+  }
+  SDL_LockSurface(base_surface);
+  SDL_LockSurface(glow_surface);
+  Uint8 *base_pixels = static_cast<Uint8 *>(base_surface->pixels);
+  Uint8 *glow_pixels = static_cast<Uint8 *>(glow_surface->pixels);
+  const int base_pitch = base_surface->pitch;
+  const int glow_pitch = glow_surface->pitch;
+
+  // The bevel runs from the rim inward over `bevel_width` texels. Inside the
+  // bevel the surface curves up like a quarter-circle (cross-section): the
+  // center is the flat top of the cuboid and the rim is where the surface
+  // peels off. We feed the bevel slope into a Blinn-Phong style lighting
+  // model to bake a 3D highlight + specular sparkle into the base texture.
+  for (int y = 0; y < tex_h; ++y) {
+    Uint8 *base_row = base_pixels + y * base_pitch;
+    Uint8 *glow_row = glow_pixels + y * glow_pitch;
+    const float fy = static_cast<float>(y) + 0.5f;
+    for (int x = 0; x < tex_w; ++x) {
+      const float fx = static_cast<float>(x) + 0.5f;
+      const float sd = rounded_rect_sdf(fx, fy);
+      // Smooth coverage across the rim for AA.
+      const float coverage =
+          std::clamp(0.5f - sd, 0.0f, 1.0f);
+      if (coverage <= 0.0f) {
+        for (int c = 0; c < 4; ++c) {
+          base_row[x * 4 + c] = 0;
+          glow_row[x * 4 + c] = 0;
+        }
+        continue;
+      }
+
+      // Numerical SDF gradient -> outward direction.
+      const float gx =
+          rounded_rect_sdf(fx + 1.0f, fy) - rounded_rect_sdf(fx - 1.0f, fy);
+      const float gy =
+          rounded_rect_sdf(fx, fy + 1.0f) - rounded_rect_sdf(fx, fy - 1.0f);
+      float gn = std::sqrt(gx * gx + gy * gy);
+      if (gn < 1e-4f) {
+        gn = 1.0f;
+      }
+      const float ox = gx / gn;
+      const float oy = gy / gn;
+
+      // Surface height profile: 0 at the rim, 1 at the flat top.
+      const float edge_dist = std::max(0.0f, -sd);
+      const float bevel_t = std::clamp(edge_dist / bevel_width, 0.0f, 1.0f);
+      const float bevel_height =
+          std::sqrt(std::max(0.0f, 2.0f * bevel_t - bevel_t * bevel_t));
+      const float cos_theta =
+          std::sqrt(std::max(0.0f, 1.0f - bevel_height * bevel_height));
+      const float nx = ox * cos_theta;
+      const float ny = oy * cos_theta;
+      const float nz = bevel_height;
+
+      const float diffuse = std::max(0.0f, nx * lx + ny * ly + nz * lz);
+      const float spec_dot = std::max(0.0f, nx * hx + ny * hy + nz * hz);
+      const float specular = std::pow(spec_dot, 28.0f);
+
+      // Strength of the baked 3D illumination. At 0 the block is a flat
+      // frosted slab, at 1 the bevel highlight + specular sparkle + rim
+      // refraction are at their nominal balance, and >1 exaggerates the
+      // plastic "glass cuboid" look.
+      const float strength = std::max(
+          0.0f, START_MENU_SPECTRUM_GLASS_3D_STRENGTH);
+      const float diffuse_term = 0.55f * diffuse;
+      const float specular_term = 0.55f * specular;
+      // Lerp the lighting variations against a flat reference (full ambient,
+      // baseline alpha) so strength=0 truly flattens the block.
+      const float body_brightness = std::clamp(
+          1.0f + strength * ((0.45f + diffuse_term + specular_term) - 1.0f),
+          0.0f, 1.4f);
+      // Edge thickening: rim is more opaque (refraction look), center is
+      // milkier. The rim contrast scales with bevel height so widening or
+      // narrowing the bevel materially changes the visible 3D rim.
+      const float rim_factor = 1.0f - bevel_height;
+      const float body_alpha = std::clamp(
+          0.16f + strength * (0.62f * rim_factor + 0.65f * specular), 0.0f,
+          1.0f);
+
+      const Uint8 base_channel = static_cast<Uint8>(std::clamp(
+          body_brightness * 255.0f, 0.0f, 255.0f));
+      const Uint8 base_alpha = static_cast<Uint8>(std::clamp(
+          body_alpha * coverage * 255.0f, 0.0f, 255.0f));
+      base_row[x * 4 + 0] = base_channel;
+      base_row[x * 4 + 1] = base_channel;
+      base_row[x * 4 + 2] = base_channel;
+      base_row[x * 4 + 3] = base_alpha;
+
+      // Glow: point light at center, falling off with squared distance.
+      // Multiplied by a smooth rim mask so the diffusion stays inside the
+      // glass and never hits the rounded edge sharply.
+      const float dx = (fx - half_w) / half_w;
+      const float dy = (fy - half_h) / half_h;
+      const float r2 = dx * dx + dy * dy;
+      const float core = std::exp(-r2 * 3.6f);
+      const float halo = std::exp(-r2 * 1.05f) * 0.45f;
+      float intensity = core + halo;
+      // Smooth attenuation across the bevel so the rim still glows but a bit
+      // softer than the lit interior.
+      const float rim_smooth =
+          0.45f + 0.55f * (bevel_t * bevel_t * (3.0f - 2.0f * bevel_t));
+      intensity *= rim_smooth;
+      intensity = std::clamp(intensity, 0.0f, 1.0f);
+      const Uint8 glow_alpha = static_cast<Uint8>(
+          std::clamp(intensity * coverage * 255.0f, 0.0f, 255.0f));
+      glow_row[x * 4 + 0] = 255;
+      glow_row[x * 4 + 1] = 255;
+      glow_row[x * 4 + 2] = 255;
+      glow_row[x * 4 + 3] = glow_alpha;
+    }
+  }
+  SDL_UnlockSurface(base_surface);
+  SDL_UnlockSurface(glow_surface);
+
+  sdl_glass_block_base_texture =
+      SDL_CreateTextureFromSurface(sdl_renderer, base_surface);
+  sdl_glass_block_glow_texture =
+      SDL_CreateTextureFromSurface(sdl_renderer, glow_surface);
+  SDL_FreeSurface(base_surface);
+  SDL_FreeSurface(glow_surface);
+  if (sdl_glass_block_base_texture == nullptr ||
+      sdl_glass_block_glow_texture == nullptr) {
+    if (sdl_glass_block_base_texture != nullptr) {
+      SDL_DestroyTexture(sdl_glass_block_base_texture);
+      sdl_glass_block_base_texture = nullptr;
+    }
+    if (sdl_glass_block_glow_texture != nullptr) {
+      SDL_DestroyTexture(sdl_glass_block_glow_texture);
+      sdl_glass_block_glow_texture = nullptr;
+    }
+    return;
+  }
+  SDL_SetTextureBlendMode(sdl_glass_block_base_texture, SDL_BLENDMODE_BLEND);
+  SDL_SetTextureScaleMode(sdl_glass_block_base_texture, SDL_ScaleModeLinear);
+  SDL_SetTextureBlendMode(sdl_glass_block_glow_texture, SDL_BLENDMODE_ADD);
+  SDL_SetTextureScaleMode(sdl_glass_block_glow_texture, SDL_ScaleModeLinear);
+  sdl_glass_block_texture_w = block_w;
+  sdl_glass_block_texture_h = block_h;
+}
+
+void Renderer::drawGlassBlock(const SDL_Rect &block_rect,
+                              const SDL_Color &color, float lit_amount) {
+  if (sdl_glass_block_base_texture == nullptr ||
+      sdl_glass_block_glow_texture == nullptr || block_rect.w <= 0 ||
+      block_rect.h <= 0) {
+    return;
+  }
+  lit_amount = std::clamp(lit_amount, 0.0f, 1.0f);
+
+  // Tint the base slightly with the column color even when unlit, so the
+  // colour ramp is faintly visible across the row. When lit, lift the tint
+  // toward the full colour to stop the glass looking grey through the glow.
+  const float tint_mix = 0.22f + 0.55f * lit_amount;
+  auto blend_channel = [&](Uint8 ch) -> Uint8 {
+    const float base_grey = 90.0f;
+    const float blended =
+        base_grey + (static_cast<float>(ch) - base_grey) * tint_mix;
+    return static_cast<Uint8>(std::clamp(blended, 0.0f, 255.0f));
+  };
+  const Uint8 base_r = blend_channel(color.r);
+  const Uint8 base_g = blend_channel(color.g);
+  const Uint8 base_b = blend_channel(color.b);
+  const Uint8 base_alpha = static_cast<Uint8>(std::clamp(
+      170.0f + 50.0f * lit_amount, 0.0f, 255.0f));
+
+  SDL_SetTextureColorMod(sdl_glass_block_base_texture, base_r, base_g, base_b);
+  SDL_SetTextureAlphaMod(sdl_glass_block_base_texture, base_alpha);
+  SDL_RenderCopy(sdl_renderer, sdl_glass_block_base_texture, nullptr,
+                 &block_rect);
+
+  if (lit_amount > 0.0f) {
+    // Boost the glow non-linearly so a partially-lit block still reads as
+    // "on" without immediately being as bright as a fully-lit one.
+    const float glow_curve =
+        lit_amount * (0.55f + 0.45f * lit_amount);
+    const Uint8 glow_alpha = static_cast<Uint8>(std::clamp(
+        glow_curve * 255.0f, 0.0f, 255.0f));
+    SDL_SetTextureColorMod(sdl_glass_block_glow_texture, color.r, color.g,
+                           color.b);
+    SDL_SetTextureAlphaMod(sdl_glass_block_glow_texture, glow_alpha);
+    SDL_RenderCopy(sdl_renderer, sdl_glass_block_glow_texture, nullptr,
+                   &block_rect);
+
+    // Halo bleed: a soft puff just outside the block sells the diffusion
+    // through the glass when the block is brightly lit.
+    if (sdl_soft_puff_texture != nullptr && lit_amount > 0.25f) {
+      const float halo_strength =
+          (lit_amount - 0.25f) / 0.75f;
+      const int halo_extra =
+          static_cast<int>(std::round(halo_strength * 6.0f));
+      const SDL_Rect halo_rect{block_rect.x - halo_extra,
+                               block_rect.y - halo_extra,
+                               block_rect.w + halo_extra * 2,
+                               block_rect.h + halo_extra * 2};
+      const Uint8 prev_blend_r = color.r;
+      const Uint8 prev_blend_g = color.g;
+      const Uint8 prev_blend_b = color.b;
+      const Uint8 halo_alpha = static_cast<Uint8>(std::clamp(
+          halo_strength * 90.0f, 0.0f, 255.0f));
+      SDL_BlendMode previous_mode = SDL_BLENDMODE_BLEND;
+      SDL_GetTextureBlendMode(sdl_soft_puff_texture, &previous_mode);
+      SDL_SetTextureBlendMode(sdl_soft_puff_texture, SDL_BLENDMODE_ADD);
+      SDL_SetTextureColorMod(sdl_soft_puff_texture, prev_blend_r, prev_blend_g,
+                             prev_blend_b);
+      SDL_SetTextureAlphaMod(sdl_soft_puff_texture, halo_alpha);
+      SDL_RenderCopy(sdl_renderer, sdl_soft_puff_texture, nullptr, &halo_rect);
+      SDL_SetTextureBlendMode(sdl_soft_puff_texture, previous_mode);
+      SDL_SetTextureColorMod(sdl_soft_puff_texture, 255, 255, 255);
+      SDL_SetTextureAlphaMod(sdl_soft_puff_texture, 255);
+    }
+  }
+
+  SDL_SetTextureColorMod(sdl_glass_block_base_texture, 255, 255, 255);
+  SDL_SetTextureAlphaMod(sdl_glass_block_base_texture, 255);
+  SDL_SetTextureColorMod(sdl_glass_block_glow_texture, 255, 255, 255);
+  SDL_SetTextureAlphaMod(sdl_glass_block_glow_texture, 255);
+}
+
+void Renderer::drawStartMenuSpectrumGlassBlocks(const SDL_Rect &panel) {
+  const int available_band_count = Audio::kMenuSpectrumBandCount;
+  if (available_band_count <= 0 || panel.w <= 1 || panel.h <= 1) {
+    return;
+  }
+
+  const int bar_count = std::clamp(START_MENU_SPECTRUM_GLASS_BAR_COUNT, 1,
+                                   available_band_count);
+  const int blocks_per_bar =
+      std::max(1, START_MENU_SPECTRUM_GLASS_BLOCKS_PER_BAR);
+  const int block_gap = std::max(0, START_MENU_SPECTRUM_GLASS_BLOCK_GAP_PX);
+  const int bar_gap = std::max(0, START_MENU_SPECTRUM_GLASS_BAR_GAP_PX);
+  const int panel_margin =
+      std::max(0, START_MENU_SPECTRUM_GLASS_PANEL_MARGIN_PX);
+  const int screen_margin =
+      std::max(0, START_MENU_SPECTRUM_GLASS_SCREEN_MARGIN_PX);
+
+  const int left_zone_inner = panel.x - panel_margin;
+  const int left_zone_outer = screen_margin;
+  const int left_zone_width = left_zone_inner - left_zone_outer;
+  const int right_zone_inner = panel.x + panel.w + panel_margin;
+  const int right_zone_outer = screen_res_x - screen_margin;
+  const int right_zone_width = right_zone_outer - right_zone_inner;
+  const int min_zone_width =
+      blocks_per_bar * 3 + (blocks_per_bar - 1) * block_gap;
+  if (left_zone_width < min_zone_width || right_zone_width < min_zone_width) {
+    return;
+  }
+
+  const int total_block_gap = (blocks_per_bar - 1) * block_gap;
+  const int block_width =
+      std::max(2, (std::min(left_zone_width, right_zone_width) -
+                   total_block_gap) /
+                      blocks_per_bar);
+  const int total_bar_gap = (bar_count - 1) * bar_gap;
+  const int block_height =
+      std::max(2, (panel.h - total_bar_gap) / bar_count);
+
+  ensureGlassBlockTextures(block_width, block_height);
+  if (sdl_glass_block_base_texture == nullptr ||
+      sdl_glass_block_glow_texture == nullptr) {
+    return;
+  }
+
+  // Fetch FFT levels and supply a gentle idle animation when nothing is
+  // playing, so the equalizer never freezes flat.
+  std::array<float, Audio::kMenuSpectrumBandCount> levels =
+      Audio::GetMenuSpectrumLevels();
+  float peak_level = 0.0f;
+  for (float level : levels) {
+    peak_level = std::max(peak_level, level);
+  }
+  const Uint32 now = SDL_GetTicks();
+  if (peak_level < 0.02f) {
+    const double clock = static_cast<double>(now);
+    for (int band = 0; band < available_band_count; ++band) {
+      const double progress =
+          static_cast<double>(band) / std::max(1, available_band_count - 1);
+      const double wave_a =
+          std::sin(clock / 410.0 + progress * 7.4) * 0.22 + 0.28;
+      const double wave_b =
+          std::sin(clock / 930.0 - progress * 11.8) * 0.14 + 0.16;
+      levels[static_cast<size_t>(band)] = static_cast<float>(
+          std::clamp(wave_a + wave_b, 0.04, 0.62));
+    }
+  }
+
+  // Aggregate adjacent bands so we can drive an arbitrary bar count.
+  std::vector<float> bar_levels(static_cast<size_t>(bar_count), 0.0f);
+  for (int bar = 0; bar < bar_count; ++bar) {
+    const int start =
+        bar * available_band_count / bar_count;
+    const int end = std::max(start + 1,
+                             (bar + 1) * available_band_count / bar_count);
+    float sum = 0.0f;
+    for (int b = start; b < end; ++b) {
+      sum += std::clamp(levels[static_cast<size_t>(b)], 0.0f, 1.0f);
+    }
+    float avg = sum / static_cast<float>(end - start);
+    avg = std::pow(avg, 0.78f);
+    bar_levels[static_cast<size_t>(bar)] = std::clamp(avg, 0.0f, 1.0f);
+  }
+
+  const int total_bars_height =
+      bar_count * block_height + total_bar_gap;
+  const int bars_origin_y =
+      panel.y + std::max(0, (panel.h - total_bars_height) / 2);
+
+  for (int bar = 0; bar < bar_count; ++bar) {
+    const float level = bar_levels[static_cast<size_t>(bar)];
+    const int bar_y = bars_origin_y + bar * (block_height + bar_gap);
+
+    for (int side = 0; side < 2; ++side) {
+      const bool is_left = (side == 0);
+      for (int col = 0; col < blocks_per_bar; ++col) {
+        const float color_factor =
+            (blocks_per_bar > 1)
+                ? static_cast<float>(col) /
+                      static_cast<float>(blocks_per_bar - 1)
+                : 0.0f;
+        const SDL_Color color = SpectrumColor(color_factor);
+
+        int block_x;
+        if (is_left) {
+          block_x = left_zone_inner - block_width -
+                    col * (block_width + block_gap);
+        } else {
+          block_x = right_zone_inner + col * (block_width + block_gap);
+        }
+
+        // VU-meter style threshold: each column corresponds to a level
+        // notch; the column on the threshold edge fades smoothly so the
+        // bars feel analogue rather than snapping.
+        const float lower =
+            static_cast<float>(col) / static_cast<float>(blocks_per_bar);
+        const float upper = static_cast<float>(col + 1) /
+                            static_cast<float>(blocks_per_bar);
+        float lit_amount = 0.0f;
+        if (level >= upper) {
+          lit_amount = 1.0f;
+        } else if (level > lower) {
+          lit_amount = (level - lower) / (upper - lower);
+        }
+
+        const SDL_Rect block_rect{block_x, bar_y, block_width, block_height};
+        drawGlassBlock(block_rect, color, lit_amount);
+      }
+    }
+  }
 }
 
 void Renderer::drawStartMenuOverlay(int selected_item,
@@ -3953,95 +4392,138 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
   const double base_sway_y =
       std::sin(clock / 890.0 + 0.7) * std::max(2.0, logo_height * 0.040);
 
-  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_BLEND);
-  SDL_SetTextureColorMod(logo_texture, 6, 18, 86);
-  SDL_SetTextureAlphaMod(logo_texture, 176);
-  const int shadow_offset = std::max(5, TTF_FontHeight(font) / 20);
-  SDL_Rect shadow_rect{
-      center_x - logo_width / 2 + static_cast<int>(std::lround(base_sway_x)) +
-          shadow_offset,
-      top_y + static_cast<int>(std::lround(base_sway_y)) + shadow_offset,
-      logo_width, logo_height};
-  SDL_RenderCopy(sdl_renderer, logo_texture, nullptr, &shadow_rect);
+  // Continuous fluid-glass warp: every point inside the logo gets a small,
+  // smoothly-varying offset built from a sum of sinusoidal fields. This
+  // replaces the old per-slice rect drawing (which produced visible pixel
+  // steps at every band) with a single mesh-deformed render.
+  const double warp_amp_x = std::max(2.5, logo_width * 0.0075);
+  const double warp_amp_y = std::max(1.6, logo_height * 0.018);
+  const double clock_a = clock / 720.0;
+  const double clock_b = clock / 480.0;
+  const double clock_c = clock / 310.0;
+  const double clock_d = clock / 540.0;
+  const double clock_e = clock / 380.0;
+  const double clock_f = clock / 260.0;
+  auto fluid_warp = [&](double fx, double fy) -> SDL_FPoint {
+    const double ox =
+        std::sin(fy * 5.6 + clock_a) * warp_amp_x +
+        std::sin(fx * 3.7 + clock_b + 1.4) * warp_amp_x * 0.55 +
+        std::sin((fx + fy) * 8.3 - clock_c) * warp_amp_x * 0.32;
+    const double oy =
+        std::sin(fx * 4.2 + clock_d + 0.8) * warp_amp_y +
+        std::sin(fy * 7.1 - clock_e) * warp_amp_y * 0.45 +
+        std::sin((fx - fy) * 9.7 + clock_f) * warp_amp_y * 0.32;
+    return SDL_FPoint{static_cast<float>(ox + base_sway_x),
+                      static_cast<float>(oy + base_sway_y)};
+  };
 
-  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_ADD);
-  for (int pass = 0; pass < 3; ++pass) {
-    const int padding = std::max(6, (pass + 1) * TTF_FontHeight(font) / 18);
-    const double glow_clock = clock / (680.0 + pass * 110.0) + pass * 0.9;
-    SDL_SetTextureColorMod(
-        logo_texture, static_cast<Uint8>(72 + pass * 32),
-        static_cast<Uint8>(156 + pass * 24), 255);
-    SDL_SetTextureAlphaMod(logo_texture, static_cast<Uint8>(58 - pass * 14));
-    SDL_Rect glow_rect{
-        center_x - logo_width / 2 - padding +
-            static_cast<int>(std::lround(base_sway_x * 0.7 +
-                                         std::sin(glow_clock) * (pass + 1))),
-        top_y - padding / 2 +
-            static_cast<int>(std::lround(base_sway_y * 0.5 +
-                                         std::cos(glow_clock * 0.9) * pass)),
-        logo_width + padding * 2, logo_height + padding};
-    SDL_RenderCopy(sdl_renderer, logo_texture, nullptr, &glow_rect);
+  // Build a uniform mesh covering the source texture. Higher density gives a
+  // smoother warp; we tie it to the on-screen size so very small logos don't
+  // pay for an oversized grid.
+  const int grid_cols =
+      std::clamp(logo_width / 14, 14, 64);
+  const int grid_rows =
+      std::clamp(logo_height / 14, 5, 24);
+  const int vertex_count = (grid_cols + 1) * (grid_rows + 1);
+  std::vector<SDL_Vertex> mesh_vertices;
+  mesh_vertices.reserve(static_cast<size_t>(vertex_count));
+  std::vector<int> mesh_indices;
+  mesh_indices.reserve(static_cast<size_t>(grid_cols * grid_rows * 6));
+  const float logo_left = static_cast<float>(center_x - logo_width / 2);
+  const float logo_top = static_cast<float>(top_y);
+  for (int gy = 0; gy <= grid_rows; ++gy) {
+    for (int gx = 0; gx <= grid_cols; ++gx) {
+      const double fx = static_cast<double>(gx) / grid_cols;
+      const double fy = static_cast<double>(gy) / grid_rows;
+      const SDL_FPoint warp = fluid_warp(fx, fy);
+      SDL_Vertex v{};
+      v.position.x = logo_left +
+                     static_cast<float>(fx) * static_cast<float>(logo_width) +
+                     warp.x;
+      v.position.y = logo_top +
+                     static_cast<float>(fy) * static_cast<float>(logo_height) +
+                     warp.y;
+      v.tex_coord.x = static_cast<float>(fx);
+      v.tex_coord.y = static_cast<float>(fy);
+      v.color = SDL_Color{255, 255, 255, 255};
+      mesh_vertices.push_back(v);
+    }
+  }
+  for (int gy = 0; gy < grid_rows; ++gy) {
+    for (int gx = 0; gx < grid_cols; ++gx) {
+      const int tl = gy * (grid_cols + 1) + gx;
+      const int tr = tl + 1;
+      const int bl = (gy + 1) * (grid_cols + 1) + gx;
+      const int br = bl + 1;
+      mesh_indices.push_back(tl);
+      mesh_indices.push_back(tr);
+      mesh_indices.push_back(bl);
+      mesh_indices.push_back(tr);
+      mesh_indices.push_back(br);
+      mesh_indices.push_back(bl);
+    }
   }
 
+  // Drop shadow: same warped mesh, offset and tinted dark blue. Drawing the
+  // shadow with the warp keeps it perfectly attached to the rippling glass.
+  const int shadow_offset_px = std::max(5, TTF_FontHeight(font) / 20);
+  std::vector<SDL_Vertex> shadow_vertices = mesh_vertices;
+  for (auto &vertex : shadow_vertices) {
+    vertex.position.x += static_cast<float>(shadow_offset_px);
+    vertex.position.y += static_cast<float>(shadow_offset_px);
+  }
+  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_BLEND);
+  SDL_SetTextureColorMod(logo_texture, 6, 18, 86);
+  SDL_SetTextureAlphaMod(logo_texture, 168);
+  SDL_RenderGeometry(sdl_renderer, logo_texture, shadow_vertices.data(),
+                     static_cast<int>(shadow_vertices.size()),
+                     mesh_indices.data(),
+                     static_cast<int>(mesh_indices.size()));
+
+  // Three-pass additive halo for the soft outer glow. Stretching is applied
+  // around the mesh centroid so the halo breathes with the warp.
+  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_ADD);
+  for (int pass = 0; pass < 3; ++pass) {
+    const double glow_clock = clock / (680.0 + pass * 110.0) + pass * 0.9;
+    const float padding =
+        static_cast<float>(std::max(8, (pass + 1) * TTF_FontHeight(font) / 16));
+    const float scale_x = 1.0f + padding / static_cast<float>(logo_width);
+    const float scale_y = 1.0f + padding / static_cast<float>(logo_height);
+    const float center_offset_x =
+        static_cast<float>(logo_left + logo_width * 0.5);
+    const float center_offset_y =
+        static_cast<float>(logo_top + logo_height * 0.5);
+    const float glow_drift_x =
+        static_cast<float>(std::sin(glow_clock) * (pass + 1));
+    const float glow_drift_y =
+        static_cast<float>(std::cos(glow_clock * 0.9) * pass);
+    std::vector<SDL_Vertex> glow_vertices = mesh_vertices;
+    for (auto &vertex : glow_vertices) {
+      vertex.position.x =
+          center_offset_x + (vertex.position.x - center_offset_x) * scale_x +
+          glow_drift_x;
+      vertex.position.y =
+          center_offset_y + (vertex.position.y - center_offset_y) * scale_y +
+          glow_drift_y;
+    }
+    SDL_SetTextureColorMod(logo_texture,
+                           static_cast<Uint8>(72 + pass * 32),
+                           static_cast<Uint8>(156 + pass * 24), 255);
+    SDL_SetTextureAlphaMod(logo_texture, static_cast<Uint8>(58 - pass * 14));
+    SDL_RenderGeometry(sdl_renderer, logo_texture, glow_vertices.data(),
+                       static_cast<int>(glow_vertices.size()),
+                       mesh_indices.data(),
+                       static_cast<int>(mesh_indices.size()));
+  }
+
+  // Main pass: the warped logo itself, full color.
   SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_BLEND);
   SDL_SetTextureColorMod(logo_texture, 255, 255, 255);
   SDL_SetTextureAlphaMod(logo_texture, 255);
-
-  const int slice_height = std::max(4, logo_height / 18);
-  const int slice_count =
-      std::max(1, (logo_height + slice_height - 1) / slice_height);
-  struct SliceTransform {
-    int src_y;
-    int src_h;
-    int dest_x;
-    int dest_y;
-    int dest_width;
-  };
-  std::vector<SliceTransform> slice_transforms;
-  slice_transforms.reserve(static_cast<size_t>(slice_count));
-
-  // Draw the logo in thin horizontal slices so each band can lag behind the
-  // main sway and feel like stacked retro layers.
-  for (int slice = 0; slice < slice_count; ++slice) {
-    const int src_y = slice * slice_height;
-    const int src_h = std::min(slice_height + 1, logo_height - src_y);
-    const double progress =
-        (slice_count > 1)
-            ? static_cast<double>(slice) / static_cast<double>(slice_count - 1)
-            : 0.0;
-    const double trailing_phase = progress * 2.6;
-    const double layer_drag =
-        std::sin(clock / 340.0 - trailing_phase * 1.7) *
-        std::max(2.0, logo_width * 0.006);
-    const double layer_pull =
-        std::sin(clock / 760.0 - trailing_phase) *
-        std::max(3.0, logo_width * 0.008);
-    const double stretch =
-        1.0 + 0.026 * std::sin(clock / 470.0 + progress * 5.5) +
-        0.010 * std::sin(clock / 230.0 - progress * 6.3);
-    const int dest_width =
-        std::max(1, static_cast<int>(std::lround(logo_width * stretch)));
-    const int dest_x = center_x - dest_width / 2 +
-                       static_cast<int>(std::lround(base_sway_x + layer_drag +
-                                                    layer_pull));
-    const int dest_y =
-        top_y + src_y +
-        static_cast<int>(std::lround(base_sway_y +
-                                     std::sin(clock / 720.0 + progress * 4.1)));
-    const SDL_Rect src_rect{0, src_y, logo_width, src_h};
-    const SDL_Rect slice_shadow_rect{dest_x + 2, dest_y + 2, dest_width,
-                                     src_h + 1};
-    SDL_SetTextureColorMod(logo_texture, 8, 26, 100);
-    SDL_SetTextureAlphaMod(logo_texture, 96);
-    SDL_RenderCopy(sdl_renderer, logo_texture, &src_rect, &slice_shadow_rect);
-
-    SDL_SetTextureColorMod(logo_texture, 255, 255, 255);
-    SDL_SetTextureAlphaMod(logo_texture, 255);
-    const SDL_Rect dest_rect{dest_x, dest_y, dest_width, src_h + 1};
-    SDL_RenderCopy(sdl_renderer, logo_texture, &src_rect, &dest_rect);
-    slice_transforms.push_back(
-        SliceTransform{src_y, src_h, dest_x, dest_y, dest_width});
-  }
+  SDL_RenderGeometry(sdl_renderer, logo_texture, mesh_vertices.data(),
+                     static_cast<int>(mesh_vertices.size()),
+                     mesh_indices.data(),
+                     static_cast<int>(mesh_indices.size()));
 
   const bool lock_logo_surface = SDL_MUSTLOCK(logo_surface);
   if (lock_logo_surface) {
@@ -4148,23 +4630,23 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
       continue;
     }
 
-    const auto slice_it = std::find_if(
-        slice_transforms.begin(), slice_transforms.end(),
-        [&](const SliceTransform &slice) {
-          return anchor.y >= slice.src_y && anchor.y < slice.src_y + slice.src_h;
-        });
-    if (slice_it == slice_transforms.end()) {
-      continue;
-    }
-
-    const double x_ratio =
-        (logo_width > 1)
-            ? static_cast<double>(anchor.x) / static_cast<double>(logo_width - 1)
+    // Project the anchor through the same fluid warp the mesh used so the
+    // sparkles ride on top of the rippling glass instead of drifting.
+    const double anchor_fx =
+        (logo_width > 0)
+            ? static_cast<double>(anchor.x) / static_cast<double>(logo_width)
             : 0.0;
-    const int sparkle_center_x = slice_it->dest_x +
-                                 static_cast<int>(std::lround(
-                                     x_ratio * static_cast<double>(slice_it->dest_width)));
-    const int sparkle_center_y = slice_it->dest_y + (anchor.y - slice_it->src_y);
+    const double anchor_fy =
+        (logo_height > 0)
+            ? static_cast<double>(anchor.y) / static_cast<double>(logo_height)
+            : 0.0;
+    const SDL_FPoint anchor_warp = fluid_warp(anchor_fx, anchor_fy);
+    const int sparkle_center_x =
+        static_cast<int>(std::lround(static_cast<double>(logo_left) +
+                                     anchor.x + anchor_warp.x));
+    const int sparkle_center_y =
+        static_cast<int>(std::lround(static_cast<double>(logo_top) +
+                                     anchor.y + anchor_warp.y));
     const double randomized_scale =
         sparkle.min_scale +
         random_fraction(31.0) * (sparkle.max_scale - sparkle.min_scale);
@@ -4677,10 +5159,11 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
     SDL_LockSurface(output_surface);
   }
 
-  const int glyph_height = std::max(1, glyph_surface->h - 1);
-  const int band_height = std::max(3, glyph_surface->h / 12);
+  const int W = glyph_surface->w;
+  const int H = glyph_surface->h;
+  const int glyph_height = std::max(1, H - 1);
   auto glyph_alpha = [&](int px, int py) -> Uint8 {
-    if (px < 0 || py < 0 || px >= glyph_surface->w || py >= glyph_surface->h) {
+    if (px < 0 || py < 0 || px >= W || py >= H) {
       return 0;
     }
 
@@ -4706,8 +5189,68 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
                      (progress - 0.52f) / 0.48f);
   };
 
-  for (int y = 0; y < glyph_surface->h; ++y) {
-    for (int x = 0; x < glyph_surface->w; ++x) {
+  // Chamfer 3-4 distance transform: how far each opaque pixel sits from the
+  // nearest "outside" pixel. The result drives the soft glass rim, the inner
+  // refraction shading and the specular sweep without ever sampling on a
+  // per-pixel boolean grid (which is what produced the old stair-stepped,
+  // pixelated aesthetic).
+  constexpr int kChamferOrth = 3;
+  constexpr int kChamferDiag = 4;
+  constexpr Uint8 kAlphaInsideThreshold = 16;
+  const int kInfDistance = (W + H) * kChamferDiag + 1;
+  std::vector<int> distance_field(static_cast<size_t>(W * H), kInfDistance);
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      if (glyph_alpha(x, y) < kAlphaInsideThreshold) {
+        distance_field[static_cast<size_t>(y * W + x)] = 0;
+      }
+    }
+  }
+  auto chamfer_relax = [&](int x, int y, int dx, int dy, int weight) {
+    const int nx = x + dx;
+    const int ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= W || ny >= H) {
+      return;
+    }
+    const int candidate =
+        distance_field[static_cast<size_t>(ny * W + nx)] + weight;
+    int &cell = distance_field[static_cast<size_t>(y * W + x)];
+    if (candidate < cell) {
+      cell = candidate;
+    }
+  };
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      if (distance_field[static_cast<size_t>(y * W + x)] == 0) {
+        continue;
+      }
+      chamfer_relax(x, y, -1, -1, kChamferDiag);
+      chamfer_relax(x, y, 0, -1, kChamferOrth);
+      chamfer_relax(x, y, 1, -1, kChamferDiag);
+      chamfer_relax(x, y, -1, 0, kChamferOrth);
+    }
+  }
+  for (int y = H - 1; y >= 0; --y) {
+    for (int x = W - 1; x >= 0; --x) {
+      if (distance_field[static_cast<size_t>(y * W + x)] == 0) {
+        continue;
+      }
+      chamfer_relax(x, y, 1, 1, kChamferDiag);
+      chamfer_relax(x, y, 0, 1, kChamferOrth);
+      chamfer_relax(x, y, -1, 1, kChamferDiag);
+      chamfer_relax(x, y, 1, 0, kChamferOrth);
+    }
+  }
+
+  // Tunables for the glass look. Scaled to glyph height so the effect stays
+  // proportional across resolutions.
+  const float rim_softness =
+      std::max(2.5f, static_cast<float>(H) * 0.040f);
+  const float specular_height = 0.24f;
+  const float specular_band = 0.18f;
+
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
       const Uint8 alpha = glyph_alpha(x, y);
       if (alpha == 0) {
         continue;
@@ -4715,63 +5258,65 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
 
       const float progress = static_cast<float>(y) / glyph_height;
       const SDL_Color base_color = gradient_color(progress);
-      float raster_boost = 1.0f;
-      switch ((y / band_height) % 4) {
-      case 0:
-        raster_boost = 1.26f;
-        break;
-      case 1:
-        raster_boost = 1.14f;
-        break;
-      case 2:
-        raster_boost = 1.00f;
-        break;
-      default:
-        raster_boost = 0.90f;
-        break;
-      }
-      const float scanline_boost =
-          ((y + x / 5) % 2 == 0) ? 1.06f : 0.95f;
-      const float shine_boost =
-          (progress < 0.34f && ((x + y / 2) % 9) < 3) ? 1.16f : 1.0f;
 
-      int red =
-          static_cast<int>(base_color.r * raster_boost * scanline_boost *
-                           shine_boost);
-      int green =
-          static_cast<int>(base_color.g * raster_boost * scanline_boost *
-                           shine_boost);
-      int blue =
-          static_cast<int>(base_color.b * raster_boost * scanline_boost *
-                           shine_boost);
+      // Distance-from-edge in approximate pixel units (chamfer 3-4 has unit
+      // weight 3 for orthogonal moves).
+      const float pixel_distance =
+          static_cast<float>(distance_field[static_cast<size_t>(y * W + x)]) /
+          static_cast<float>(kChamferOrth);
+      const float rim_t =
+          std::clamp(pixel_distance / rim_softness, 0.0f, 1.0f);
+      // Quarter-circle profile: 0 right at the rim, 1 well inside the body.
+      const float rim_curve =
+          std::sqrt(std::max(0.0f, 2.0f * rim_t - rim_t * rim_t));
+      const float rim_factor = 1.0f - rim_curve;  // 1 = rim, 0 = interior
 
-      const Uint8 left = glyph_alpha(x - 1, y);
-      const Uint8 right = glyph_alpha(x + 1, y);
-      const Uint8 up = glyph_alpha(x, y - 1);
-      const Uint8 down = glyph_alpha(x, y + 1);
-      const Uint8 diagonal = glyph_alpha(x - 1, y - 1);
-      const bool edge = left == 0 || right == 0 || up == 0 || down == 0;
-      const bool highlight_edge = left == 0 || up == 0 || diagonal == 0;
-      const bool shadow_edge = right == 0 || down == 0;
+      // Light from above: top rim catches highlights, bottom rim picks up the
+      // outline color, and the body refracts gently toward the deep color.
+      const float light_split =
+          std::clamp((0.42f - progress) * 2.4f, -1.0f, 1.0f);
+      const float top_rim = rim_factor * std::max(0.0f, light_split) * 0.92f;
+      const float bottom_rim =
+          rim_factor * std::max(0.0f, -light_split) * 0.65f;
 
-      if (highlight_edge) {
-        red = (red * 2 + kStartLogoHighlightColor.r * 3) / 5 + 8;
-        green = (green * 2 + kStartLogoHighlightColor.g * 3) / 5 + 10;
-        blue = (blue * 2 + kStartLogoHighlightColor.b * 3) / 5 + 10;
-      }
-      if (shadow_edge) {
-        red = (red * 2 + kStartLogoOutlineColor.r * 3) / 5;
-        green = (green * 2 + kStartLogoOutlineColor.g * 3) / 5;
-        blue = (blue * 2 + kStartLogoOutlineColor.b * 3) / 5;
-      } else if (edge) {
-        red = (red * 3 + kStartLogoOutlineColor.r * 2) / 5;
-        green = (green * 3 + kStartLogoOutlineColor.g * 2) / 5;
-        blue = (blue * 3 + kStartLogoOutlineColor.b * 2) / 5;
-      }
+      // Specular sweep: a soft horizontal sheen sitting above the midline. It
+      // peaks in the body of each glyph (rim_curve high) and fades over the
+      // rim so it never bleeds outside the letter shape.
+      const float spec_arg = (progress - specular_height) / specular_band;
+      const float specular =
+          std::exp(-spec_arg * spec_arg) * std::pow(rim_curve, 1.6f) * 0.55f;
 
-      red = std::clamp(red, 0, 255);
-      green = std::clamp(green, 0, 255);
-      blue = std::clamp(blue, 0, 255);
+      // Inner refraction: very deep glass tint near the geometric center,
+      // giving the letter visual depth instead of a flat fill.
+      const float inner_depth = rim_curve * (0.18f + 0.22f * progress);
+
+      float r = base_color.r;
+      float g = base_color.g;
+      float b = base_color.b;
+
+      auto mix_toward = [](float channel, Uint8 target, float amount) {
+        return channel + (static_cast<float>(target) - channel) * amount;
+      };
+
+      r = mix_toward(r, kStartLogoDeepColor.r, inner_depth);
+      g = mix_toward(g, kStartLogoDeepColor.g, inner_depth);
+      b = mix_toward(b, kStartLogoDeepColor.b, inner_depth);
+
+      r = mix_toward(r, kStartLogoHighlightColor.r, top_rim);
+      g = mix_toward(g, kStartLogoHighlightColor.g, top_rim);
+      b = mix_toward(b, kStartLogoHighlightColor.b, top_rim);
+
+      r = mix_toward(r, kStartLogoOutlineColor.r, bottom_rim);
+      g = mix_toward(g, kStartLogoOutlineColor.g, bottom_rim);
+      b = mix_toward(b, kStartLogoOutlineColor.b, bottom_rim);
+
+      r = mix_toward(r, 255, specular);
+      g = mix_toward(g, 255, specular);
+      b = mix_toward(b, 255, specular);
+
+      const int red = std::clamp(static_cast<int>(std::lround(r)), 0, 255);
+      const int green = std::clamp(static_cast<int>(std::lround(g)), 0, 255);
+      const int blue = std::clamp(static_cast<int>(std::lround(b)), 0, 255);
 
       writePixel(output_surface, x, y,
                  SDL_MapRGBA(output_surface->format, red, green, blue, alpha));

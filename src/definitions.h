@@ -169,11 +169,35 @@ inline constexpr int END_SCREEN_MINIMUM_MS = 3000;
  * translucent side surfaces in the start menu; the margin caps how far the
  * FFT curve may expand towards the screen edge and the fill alpha controls the
  * overall intensity.
+ *
+ * `START_MENU_SPECTRUM_GLASS_BLOCKS` selects an alternative visualization that
+ * replaces the spline-curve surface with a horizontal glass-block equalizer.
+ * Comment out the macro to fall back to the original spline rendering. The
+ * remaining `START_MENU_SPECTRUM_GLASS_*` constants are only consumed when the
+ * macro is active and tune the bar/block layout, spacing, corner rounding and
+ * the rim/edge bevel that gives each block its 3D look. All distances are in
+ * pixels at the reference resolution; the renderer scales them down on small
+ * screens so the bars never spill into the menu area.
  */
 inline constexpr int GAME_START_COUNTDOWN = 3;
 inline constexpr int MENU_MUSIC_FADE_OUT_MS = 2000;
 inline constexpr int START_MENU_SPECTRUM_OUTER_MARGIN = 10;
 inline constexpr Uint8 START_MENU_SPECTRUM_FILL_ALPHA = 118;
+
+#define START_MENU_SPECTRUM_GLASS_BLOCKS
+
+inline constexpr int START_MENU_SPECTRUM_GLASS_BAR_COUNT = 10;
+inline constexpr int START_MENU_SPECTRUM_GLASS_BLOCKS_PER_BAR = 20;
+inline constexpr int START_MENU_SPECTRUM_GLASS_BLOCK_GAP_PX = 2;
+inline constexpr int START_MENU_SPECTRUM_GLASS_BAR_GAP_PX = 3;
+inline constexpr int START_MENU_SPECTRUM_GLASS_PANEL_MARGIN_PX = 22;
+inline constexpr int START_MENU_SPECTRUM_GLASS_SCREEN_MARGIN_PX = 16;
+inline constexpr int START_MENU_SPECTRUM_GLASS_CORNER_RADIUS_PX = 3;
+inline constexpr int START_MENU_SPECTRUM_GLASS_EDGE_BEVEL_PX = 2;
+// Skaliert die plastische 3D-Anmutung der Glasbausteine (Diffuse-Highlight,
+// Specular-Funkeln, Rand-Refraktion). 0.0f = flach milchig ohne Beleuchtung,
+// 1.0f = ausgewogen rundes Quader-Look, 2.0f = überzeichnet plastisch.
+inline constexpr float START_MENU_SPECTRUM_GLASS_3D_STRENGTH = 1.0f;
 
 /**
  * @brief Player life configuration.

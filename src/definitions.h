@@ -187,9 +187,9 @@ inline constexpr Uint8 START_MENU_SPECTRUM_FILL_ALPHA = 118;
 #define START_MENU_SPECTRUM_GLASS_BLOCKS
 
 inline constexpr int START_MENU_SPECTRUM_GLASS_BAR_COUNT = 10;
-inline constexpr int START_MENU_SPECTRUM_GLASS_BLOCKS_PER_BAR = 20;
-inline constexpr int START_MENU_SPECTRUM_GLASS_BLOCK_GAP_PX = 2;
-inline constexpr int START_MENU_SPECTRUM_GLASS_BAR_GAP_PX = 3;
+inline constexpr int START_MENU_SPECTRUM_GLASS_BLOCKS_PER_BAR = 15;
+inline constexpr int START_MENU_SPECTRUM_GLASS_BLOCK_GAP_PX = 3;
+inline constexpr int START_MENU_SPECTRUM_GLASS_BAR_GAP_PX = 5;
 inline constexpr int START_MENU_SPECTRUM_GLASS_PANEL_MARGIN_PX = 22;
 inline constexpr int START_MENU_SPECTRUM_GLASS_SCREEN_MARGIN_PX = 16;
 inline constexpr int START_MENU_SPECTRUM_GLASS_CORNER_RADIUS_PX = 3;
@@ -198,6 +198,116 @@ inline constexpr int START_MENU_SPECTRUM_GLASS_EDGE_BEVEL_PX = 2;
 // Specular-Funkeln, Rand-Refraktion). 0.0f = flach milchig ohne Beleuchtung,
 // 1.0f = ausgewogen rundes Quader-Look, 2.0f = überzeichnet plastisch.
 inline constexpr float START_MENU_SPECTRUM_GLASS_3D_STRENGTH = 1.0f;
+
+/**
+ * @brief Animiertes Liquid-Glass-Logo "BobMan" im Startmenü.
+ *
+ * Die Schrift wird als echtes 3D-Volumen aus zähflüssigem dunkelblauen Glas
+ * gerendert: TTF-Glyph -> per-Pixel-Shader (Glass-Body, Refraktionsrand,
+ * Multi-Light-Reflexe) -> Mesh-Warp für die flüssige Bewegung -> Stack aus
+ * `DEPTH_SLICES` versetzten Schichten für die Tiefenwirkung. Alle Werte mit
+ * "_FACTOR" werden zur Laufzeit mit der Glyph- oder Schrifthöhe multipliziert,
+ * damit der Look auf jeder Auflösung konsistent bleibt.
+ */
+
+// Transparenz des Buchstabenkörpers. 0.0f = komplett durchsichtig, 1.0f =
+// blickdicht. Niedriger = der Menühintergrund schimmert stärker durch und das
+// Glas wirkt dünner/transluzenter.
+inline constexpr float START_MENU_LOGO_BODY_ALPHA = 0.22f;
+
+// Transparenz des Außenrandes. Zu hoch -> harte Outline (kein Glas-Look),
+// zu niedrig -> Silhouette wird unleserlich.
+inline constexpr float START_MENU_LOGO_RIM_ALPHA = 0.92f;
+
+// Breite der gläsernen Randzone als Anteil der Glyph-Höhe. Größer = breiter
+// Refraktionsrand, dickeres Glas; kleiner = scharfer Schnitt.
+inline constexpr float START_MENU_LOGO_RIM_SOFTNESS_FACTOR = 0.025f;
+
+// Innere Refraktion: wie stark die geometrische Mitte jedes Buchstabens zur
+// dunkelsten Navy-Farbe gezogen wird. Höher = mehr Volumen / dunklere Mitte.
+inline constexpr float START_MENU_LOGO_INNER_DEPTH_BASE = 0.30f;
+inline constexpr float START_MENU_LOGO_INNER_DEPTH_RAMP = 0.22f;
+
+// Stärke des cyan-blauen Refraktionsstreifens, der umlaufend am Rand sitzt.
+// Höher = stärkerer "lichtbrechender" Glaseindruck am Rand.
+inline constexpr float START_MENU_LOGO_REFRACTION_STRENGTH = 0.30f;
+
+// Globaler Multiplikator für alle eingebackenen Lichtreflexe. 0.0f schaltet
+// die Reflexe komplett aus (reines Glas ohne Highlights), 1.0f = Standard,
+// >1.0f = überstrahlte Highlights.
+inline constexpr float START_MENU_LOGO_LIGHT_INTENSITY = 0.5f;
+
+// Begrenzt die Reflexe auf die "flache Oberseite" des Glaskörpers. Höher =
+// Highlights bleiben sauber innen; niedriger = sie laufen über den Rand.
+inline constexpr float START_MENU_LOGO_LIGHT_GATE_EXPONENT = 3.3f;
+
+// Sigma der Gauss-Glättung der Glyph-Alpha-Maske (in Pixeln) - rundet scharfe
+// Schriftecken ab, bevor Distanztransformation und Alpha berechnet werden.
+// Höher = rundere Ecken aber dickere Schrift; 0.0f = Originalkanten.
+inline constexpr float START_MENU_LOGO_CORNER_BLUR_SIGMA = 0.3f;
+
+// Glaskörper-Farbverlauf vom Top zur Tiefe. Diese drei Stops definieren die
+// Grundfarbe des "dunkelblauen Glases".
+inline constexpr SDL_Color START_MENU_LOGO_BODY_TOP_COLOR{130, 164, 238, 255};
+inline constexpr SDL_Color START_MENU_LOGO_BODY_MID_COLOR{62, 78, 128, 255};
+inline constexpr SDL_Color START_MENU_LOGO_BODY_DEEP_COLOR{54, 60, 92, 255};
+
+// Rand-Farben: Highlight oben (Lichteinfall), Refraktionsstreifen (umlaufend)
+// und Outline-Schatten unten (für Silhouette gegen helle Hintergründe).
+inline constexpr SDL_Color START_MENU_LOGO_RIM_HIGHLIGHT_COLOR{220, 240, 255,
+                                                               255};
+inline constexpr SDL_Color START_MENU_LOGO_RIM_REFRACTION_COLOR{90, 168, 240,
+                                                                255};
+inline constexpr SDL_Color START_MENU_LOGO_RIM_SHADOW_COLOR{2, 6, 26, 255};
+
+// 3D-Extrusion: Anzahl der gestapelten Tiefenschichten. Höher = glattere
+// Seitenwände, mehr Render-Aufwand. 6 wirkt low-poly, 30 ultraglatt.
+inline constexpr int START_MENU_LOGO_DEPTH_SLICES = 28;
+
+// Richtung, in die die Extrusion vom Vorderfläche aus läuft (Bildschirm-
+// koordinaten). (0.55, 0.85) = leicht nach unten/rechts. Vorzeichen ändern
+// dreht die Blickrichtung; Länge des Vektors zusammen mit DEPTH_FACTOR
+// bestimmt die effektive Tiefe.
+inline constexpr float START_MENU_LOGO_DEPTH_DIR_X = 0.05f;
+inline constexpr float START_MENU_LOGO_DEPTH_DIR_Y = 0.55f;
+
+// Gesamttiefe der Extrusion als Anteil der Schrifthöhe. 0.0f = flaches 2D-
+// Logo, 0.16f = sichtbarer 3D-Quader, 0.30f = klobig.
+inline constexpr float START_MENU_LOGO_DEPTH_FACTOR = 0.16f;
+
+// Tiefen-Parallaxe: wie viel weniger die hinteren Schichten beim Wabbeln
+// mitschwingen. 0.0f = Stack bewegt sich starr, 1.0f = nur Vorderfläche
+// wabbelt während die Rückseite eingefroren wirkt.
+inline constexpr float START_MENU_LOGO_DEPTH_PARALLAX = 0.70f;
+
+// Tönung der hintersten Extrusionsschicht. Definiert den Farbeindruck der
+// Seitenwände / des inneren Glasvolumens. Dunkler = tieferer Volumeneindruck.
+inline constexpr SDL_Color START_MENU_LOGO_BACK_TINT{16, 28, 70, 255};
+
+// Liquid-Warp Amplituden als Anteil von Logo-Breite/-Höhe. Größer = breitere
+// Wellen; sichtbar verzerrtes Glas.
+inline constexpr float START_MENU_LOGO_WARP_AMP_X_FACTOR = 0.0175f;
+inline constexpr float START_MENU_LOGO_WARP_AMP_Y_FACTOR = 0.038f;
+
+// Geschwindigkeitsfaktor der Liquid-Welle. 1.0f = zähflüssiger Standard,
+// <1.0f = noch dickflüssiger, >1.0f = quirligere/lockere Bewegung.
+inline constexpr double START_MENU_LOGO_WARP_SPEED = 1.0;
+
+// Drop-Shadow unter dem Glas. Offset = Schrifthöhe * SHADOW_OFFSET_FACTOR
+// (mindestens 5 px); Alpha = Sichtbarkeit; Farbe = Schattenton.
+inline constexpr float START_MENU_LOGO_SHADOW_OFFSET_FACTOR = 0.05f;
+inline constexpr Uint8 START_MENU_LOGO_SHADOW_ALPHA = 168;
+inline constexpr SDL_Color START_MENU_LOGO_SHADOW_COLOR{6, 18, 86, 255};
+
+// Aufblitzende Glanzlicht-Sterne ("Sparkles") auf der Glasoberfläche.
+// SPARKLE_TINT_STRENGTH blendet die drei Sparkle-Schichten (weicher Halo,
+// hellblaue Spitze, weißer Kern) linear in Richtung SPARKLE_TINT_COLOR.
+// 0.0f = neutral cyan/weiß (klassischer Funkel), 1.0f = vollständig auf den
+// Logo-Farbton gefärbt (Sparkle wirkt wie Teil des Glases). SPARKLE_TINT_COLOR
+// gibt diesen Farbton vor und sollte am ehesten zu den Glas-Reflexen passen.
+inline constexpr SDL_Color START_MENU_LOGO_SPARKLE_TINT_COLOR{140, 188, 240,
+                                                              255};
+inline constexpr float START_MENU_LOGO_SPARKLE_TINT_STRENGTH = 0.6f;
 
 /**
  * @brief Player life configuration.

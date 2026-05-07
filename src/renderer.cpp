@@ -4396,14 +4396,23 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
   // smoothly-varying offset built from a sum of sinusoidal fields. This
   // replaces the old per-slice rect drawing (which produced visible pixel
   // steps at every band) with a single mesh-deformed render.
-  const double warp_amp_x = std::max(2.5, logo_width * 0.0075);
-  const double warp_amp_y = std::max(1.6, logo_height * 0.018);
-  const double clock_a = clock / 720.0;
-  const double clock_b = clock / 480.0;
-  const double clock_c = clock / 310.0;
-  const double clock_d = clock / 540.0;
-  const double clock_e = clock / 380.0;
-  const double clock_f = clock / 260.0;
+  // Liquid-glass warp. Amplitudes and base periods are scaled to logo size so
+  // the look stays consistent across resolutions; `START_MENU_LOGO_WARP_SPEED`
+  // multiplies the elapsed clock so values <1 thicken the flow further and
+  // values >1 turn it back into a quicker ripple.
+  const double warp_amp_x = std::max(
+      2.5, static_cast<double>(logo_width) *
+               static_cast<double>(START_MENU_LOGO_WARP_AMP_X_FACTOR));
+  const double warp_amp_y = std::max(
+      1.6, static_cast<double>(logo_height) *
+               static_cast<double>(START_MENU_LOGO_WARP_AMP_Y_FACTOR));
+  const double warp_speed = std::max(0.0, START_MENU_LOGO_WARP_SPEED);
+  const double clock_a = clock * warp_speed / 1180.0;
+  const double clock_b = clock * warp_speed / 760.0;
+  const double clock_c = clock * warp_speed / 540.0;
+  const double clock_d = clock * warp_speed / 880.0;
+  const double clock_e = clock * warp_speed / 620.0;
+  const double clock_f = clock * warp_speed / 460.0;
   auto fluid_warp = [&](double fx, double fy) -> SDL_FPoint {
     const double ox =
         std::sin(fy * 5.6 + clock_a) * warp_amp_x +
@@ -4466,64 +4475,111 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
 
   // Drop shadow: same warped mesh, offset and tinted dark blue. Drawing the
   // shadow with the warp keeps it perfectly attached to the rippling glass.
-  const int shadow_offset_px = std::max(5, TTF_FontHeight(font) / 20);
+  // Offset / color / alpha are tunable via `definitions.h`.
+  const int shadow_offset_px =
+      std::max(5, static_cast<int>(std::lround(
+                       static_cast<float>(TTF_FontHeight(font)) *
+                       START_MENU_LOGO_SHADOW_OFFSET_FACTOR)));
   std::vector<SDL_Vertex> shadow_vertices = mesh_vertices;
   for (auto &vertex : shadow_vertices) {
     vertex.position.x += static_cast<float>(shadow_offset_px);
     vertex.position.y += static_cast<float>(shadow_offset_px);
   }
   SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_BLEND);
-  SDL_SetTextureColorMod(logo_texture, 6, 18, 86);
-  SDL_SetTextureAlphaMod(logo_texture, 168);
+  SDL_SetTextureColorMod(logo_texture, START_MENU_LOGO_SHADOW_COLOR.r,
+                         START_MENU_LOGO_SHADOW_COLOR.g,
+                         START_MENU_LOGO_SHADOW_COLOR.b);
+  SDL_SetTextureAlphaMod(logo_texture, START_MENU_LOGO_SHADOW_ALPHA);
   SDL_RenderGeometry(sdl_renderer, logo_texture, shadow_vertices.data(),
                      static_cast<int>(shadow_vertices.size()),
                      mesh_indices.data(),
                      static_cast<int>(mesh_indices.size()));
 
-  // Three-pass additive halo for the soft outer glow. Stretching is applied
-  // around the mesh centroid so the halo breathes with the warp.
-  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_ADD);
-  for (int pass = 0; pass < 3; ++pass) {
-    const double glow_clock = clock / (680.0 + pass * 110.0) + pass * 0.9;
-    const float padding =
-        static_cast<float>(std::max(8, (pass + 1) * TTF_FontHeight(font) / 16));
-    const float scale_x = 1.0f + padding / static_cast<float>(logo_width);
-    const float scale_y = 1.0f + padding / static_cast<float>(logo_height);
-    const float center_offset_x =
-        static_cast<float>(logo_left + logo_width * 0.5);
-    const float center_offset_y =
-        static_cast<float>(logo_top + logo_height * 0.5);
-    const float glow_drift_x =
-        static_cast<float>(std::sin(glow_clock) * (pass + 1));
-    const float glow_drift_y =
-        static_cast<float>(std::cos(glow_clock * 0.9) * pass);
-    std::vector<SDL_Vertex> glow_vertices = mesh_vertices;
-    for (auto &vertex : glow_vertices) {
-      vertex.position.x =
-          center_offset_x + (vertex.position.x - center_offset_x) * scale_x +
-          glow_drift_x;
-      vertex.position.y =
-          center_offset_y + (vertex.position.y - center_offset_y) * scale_y +
-          glow_drift_y;
+  // 3D extrusion: instead of a single 2D mesh draw we paint the logo as a
+  // back-to-front stack of warped slices. Each slice is the same surface
+  // shifted along the camera-down-right depth axis and tinted darker, so the
+  // visible side walls emerge from successive layers and the front face sits
+  // on top with its full glass shading. This turns the logo into a real
+  // extruded 3D solid rather than a 2D image with painted-on highlights. All
+  // tuning of slice count, axis, depth and parallax happens in
+  // `definitions.h`.
+  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_BLEND);
+  // The depth axis carries a very gentle clock-driven wobble so the 3D solid
+  // breathes rather than sitting rigid. The base direction is set by the
+  // `START_MENU_LOGO_DEPTH_DIR_*` constants.
+  const double depth_breathe = std::sin(clock / 1200.0) * 0.18;
+  const float depth_dir_x =
+      START_MENU_LOGO_DEPTH_DIR_X + static_cast<float>(depth_breathe) * 0.10f;
+  const float depth_dir_y =
+      START_MENU_LOGO_DEPTH_DIR_Y - static_cast<float>(depth_breathe) * 0.10f;
+  const float total_depth_px = std::max(
+      8.0f, static_cast<float>(TTF_FontHeight(font)) *
+                START_MENU_LOGO_DEPTH_FACTOR);
+  const int kDepthSlices = std::max(2, START_MENU_LOGO_DEPTH_SLICES);
+  const float depth_step_x = depth_dir_x * total_depth_px /
+                             static_cast<float>(kDepthSlices - 1);
+  const float depth_step_y = depth_dir_y * total_depth_px /
+                             static_cast<float>(kDepthSlices - 1);
+  // Side-wall tint comes from `START_MENU_LOGO_BACK_TINT`.
+  std::vector<SDL_Vertex> slice_vertices(mesh_vertices.size());
+  for (int slice = kDepthSlices - 1; slice >= 0; --slice) {
+    // z_norm: 1 at the back-most slice, 0 at the front face.
+    const float z_norm =
+        static_cast<float>(slice) / static_cast<float>(kDepthSlices - 1);
+    const float ox = depth_step_x * static_cast<float>(slice);
+    const float oy = depth_step_y * static_cast<float>(slice);
+    // Per-slice parallax on the warp so the depth column doesn't move as a
+    // rigid block during the fluid wobble.
+    const float warp_falloff =
+        1.0f - START_MENU_LOGO_DEPTH_PARALLAX * z_norm;
+    for (size_t i = 0; i < mesh_vertices.size(); ++i) {
+      const SDL_Vertex &src = mesh_vertices[i];
+      SDL_Vertex &dst = slice_vertices[i];
+      const double fx = static_cast<double>(src.tex_coord.x);
+      const double fy = static_cast<double>(src.tex_coord.y);
+      const float untransformed_x = logo_left +
+                                    static_cast<float>(fx) *
+                                        static_cast<float>(logo_width);
+      const float untransformed_y = logo_top +
+                                    static_cast<float>(fy) *
+                                        static_cast<float>(logo_height);
+      const float warp_x = src.position.x - untransformed_x;
+      const float warp_y = src.position.y - untransformed_y;
+      dst.position.x = untransformed_x + warp_x * warp_falloff + ox;
+      dst.position.y = untransformed_y + warp_y * warp_falloff + oy;
+      dst.tex_coord = src.tex_coord;
+      dst.color = src.color;
     }
-    SDL_SetTextureColorMod(logo_texture,
-                           static_cast<Uint8>(72 + pass * 32),
-                           static_cast<Uint8>(156 + pass * 24), 255);
-    SDL_SetTextureAlphaMod(logo_texture, static_cast<Uint8>(58 - pass * 14));
-    SDL_RenderGeometry(sdl_renderer, logo_texture, glow_vertices.data(),
-                       static_cast<int>(glow_vertices.size()),
+    // Per-slice color and alpha grading: the front slice keeps the full
+    // glass surface, the slices behind are progressively pulled toward
+    // the deep navy side-wall tint and faded out so the back doesn't
+    // overpower the front. The midline gets a soft cyan kick to suggest
+    // light bouncing through the glass volume.
+    const float depth_t = z_norm;
+    const float side_mix = 0.18f + 0.62f * depth_t;
+    const float alpha_norm =
+        std::clamp(0.30f + 0.70f * (1.0f - depth_t * depth_t), 0.0f, 1.0f);
+    const Uint8 cmod_r = static_cast<Uint8>(std::lround(
+        255.0f * (1.0f - side_mix) +
+        static_cast<float>(START_MENU_LOGO_BACK_TINT.r) * side_mix));
+    const Uint8 cmod_g = static_cast<Uint8>(std::lround(
+        255.0f * (1.0f - side_mix) +
+        static_cast<float>(START_MENU_LOGO_BACK_TINT.g) * side_mix));
+    const Uint8 cmod_b = static_cast<Uint8>(std::lround(
+        255.0f * (1.0f - side_mix) +
+        static_cast<float>(START_MENU_LOGO_BACK_TINT.b) * side_mix));
+    const Uint8 alpha_mod =
+        static_cast<Uint8>(std::clamp(
+            static_cast<int>(std::lround(alpha_norm * 255.0f)), 0, 255));
+    SDL_SetTextureColorMod(logo_texture, cmod_r, cmod_g, cmod_b);
+    SDL_SetTextureAlphaMod(logo_texture, alpha_mod);
+    SDL_RenderGeometry(sdl_renderer, logo_texture, slice_vertices.data(),
+                       static_cast<int>(slice_vertices.size()),
                        mesh_indices.data(),
                        static_cast<int>(mesh_indices.size()));
   }
-
-  // Main pass: the warped logo itself, full color.
-  SDL_SetTextureBlendMode(logo_texture, SDL_BLENDMODE_BLEND);
   SDL_SetTextureColorMod(logo_texture, 255, 255, 255);
   SDL_SetTextureAlphaMod(logo_texture, 255);
-  SDL_RenderGeometry(sdl_renderer, logo_texture, mesh_vertices.data(),
-                     static_cast<int>(mesh_vertices.size()),
-                     mesh_indices.data(),
-                     static_cast<int>(mesh_indices.size()));
 
   const bool lock_logo_surface = SDL_MUSTLOCK(logo_surface);
   if (lock_logo_surface) {
@@ -4689,11 +4745,26 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
       }
     };
 
-    draw_four_point_star(SDL_Color{88, 214, 255, 255}, halo_alpha, halo_arm,
+    // Pull the three sparkle layers toward the configured logo tint color.
+    // Strength 0 keeps the original cyan/white glints; strength 1 dyes them
+    // fully in the logo's color so the sparkles read as part of the glass.
+    const float sparkle_tint_t =
+        std::clamp(START_MENU_LOGO_SPARKLE_TINT_STRENGTH, 0.0f, 1.0f);
+    const SDL_Color sparkle_halo_color = LerpColor(
+        SDL_Color{88, 214, 255, 255}, START_MENU_LOGO_SPARKLE_TINT_COLOR,
+        sparkle_tint_t);
+    const SDL_Color sparkle_outer_color = LerpColor(
+        SDL_Color{184, 240, 255, 255}, START_MENU_LOGO_SPARKLE_TINT_COLOR,
+        sparkle_tint_t);
+    const SDL_Color sparkle_inner_color = LerpColor(
+        SDL_Color{255, 255, 255, 255}, START_MENU_LOGO_SPARKLE_TINT_COLOR,
+        sparkle_tint_t);
+
+    draw_four_point_star(sparkle_halo_color, halo_alpha, halo_arm,
                          outer_thickness + 1);
-    draw_four_point_star(SDL_Color{184, 240, 255, 255}, outer_alpha, major_arm,
+    draw_four_point_star(sparkle_outer_color, outer_alpha, major_arm,
                          outer_thickness);
-    draw_four_point_star(SDL_Color{255, 255, 255, 255}, inner_alpha, inner_arm,
+    draw_four_point_star(sparkle_inner_color, inner_alpha, inner_arm,
                          inner_thickness);
   }
 
@@ -5162,7 +5233,7 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
   const int W = glyph_surface->w;
   const int H = glyph_surface->h;
   const int glyph_height = std::max(1, H - 1);
-  auto glyph_alpha = [&](int px, int py) -> Uint8 {
+  auto raw_glyph_alpha = [&](int px, int py) -> Uint8 {
     if (px < 0 || py < 0 || px >= W || py >= H) {
       return 0;
     }
@@ -5176,18 +5247,100 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
     return alpha;
   };
 
-  auto gradient_color = [](float progress) -> SDL_Color {
-    if (progress < 0.18f) {
-      return LerpColor(kStartLogoHighlightColor, kStartLogoLightColor,
-                       progress / 0.18f);
+  // Round the sharp font corners (e.g. the peaks of "M") with a small
+  // separable Gaussian blur of the alpha map. The blurred map then drives
+  // both the silhouette / distance transform and the final per-pixel
+  // transparency, so the whole logo reads as a softer, more glassy shape
+  // without ever stepping over crisp font hinting. The blur radius is
+  // derived from `START_MENU_LOGO_CORNER_BLUR_SIGMA`.
+  const float blur_sigma =
+      std::max(0.001f, START_MENU_LOGO_CORNER_BLUR_SIGMA);
+  const int blur_radius = std::clamp(
+      static_cast<int>(std::ceil(blur_sigma * 3.0f)), 1, 8);
+  std::vector<float> blur_kernel(static_cast<size_t>(blur_radius * 2 + 1));
+  float blur_kernel_sum = 0.0f;
+  for (int k = -blur_radius; k <= blur_radius; ++k) {
+    const float w = std::exp(-static_cast<float>(k * k) /
+                             (2.0f * blur_sigma * blur_sigma));
+    blur_kernel[static_cast<size_t>(k + blur_radius)] = w;
+    blur_kernel_sum += w;
+  }
+  for (auto &w : blur_kernel) {
+    w /= blur_kernel_sum;
+  }
+  std::vector<float> blur_horizontal(static_cast<size_t>(W * H), 0.0f);
+  std::vector<float> smoothed_alpha(static_cast<size_t>(W * H), 0.0f);
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      float sum = 0.0f;
+      for (int k = -blur_radius; k <= blur_radius; ++k) {
+        const int sx = std::clamp(x + k, 0, W - 1);
+        sum += static_cast<float>(raw_glyph_alpha(sx, y)) *
+               blur_kernel[static_cast<size_t>(k + blur_radius)];
+      }
+      blur_horizontal[static_cast<size_t>(y * W + x)] = sum;
     }
-    if (progress < 0.52f) {
-      return LerpColor(kStartLogoLightColor, kStartLogoMidColor,
-                       (progress - 0.18f) / 0.34f);
+  }
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      float sum = 0.0f;
+      for (int k = -blur_radius; k <= blur_radius; ++k) {
+        const int sy = std::clamp(y + k, 0, H - 1);
+        sum += blur_horizontal[static_cast<size_t>(sy * W + x)] *
+               blur_kernel[static_cast<size_t>(k + blur_radius)];
+      }
+      smoothed_alpha[static_cast<size_t>(y * W + x)] = sum;
     }
-    return LerpColor(kStartLogoMidColor, kStartLogoDeepColor,
-                     (progress - 0.52f) / 0.48f);
+  }
+
+  auto glyph_alpha = [&](int px, int py) -> Uint8 {
+    if (px < 0 || py < 0 || px >= W || py >= H) {
+      return 0;
+    }
+    return static_cast<Uint8>(std::clamp(
+        static_cast<int>(std::lround(
+            smoothed_alpha[static_cast<size_t>(py * W + px)])),
+        0, 255));
   };
+
+  // Dark-blue glass body. Slight vertical gradient gives the volume a hint of
+  // depth while keeping the overall tone deep navy. The actual visual life
+  // comes from the rim refraction and the multi-light reflections below.
+  // Color stops, rim colors and translucency are tuned via `definitions.h`.
+  auto body_color_at = [&](float progress) -> SDL_Color {
+    if (progress < 0.5f) {
+      return LerpColor(START_MENU_LOGO_BODY_TOP_COLOR,
+                       START_MENU_LOGO_BODY_MID_COLOR, progress * 2.0f);
+    }
+    return LerpColor(START_MENU_LOGO_BODY_MID_COLOR,
+                     START_MENU_LOGO_BODY_DEEP_COLOR,
+                     (progress - 0.5f) * 2.0f);
+  };
+
+  // Reflections from a small environment of light sources. Positions are in
+  // normalized surface space (0..1 across width / height). Each light writes
+  // an additive specular spot whose footprint is a Gaussian; the spot is
+  // limited to the "flat top" of the glass via the rim_curve modulator so it
+  // never bleeds across the rounded rim.
+  struct GlassLight {
+    float nx;
+    float ny;
+    float sigma;
+    float intensity;
+    Uint8 r;
+    Uint8 g;
+    Uint8 b;
+    float power;  // exponent applied to the Gaussian for sharper / softer hot-spot
+  };
+  // Two restrained reflections from above, both cool blue-white. Deliberately
+  // dim so the body stays a deep, translucent navy instead of being lit up
+  // into white blobs.
+  constexpr std::array<GlassLight, 2> kGlassLights{{
+      // Primary key light: cool white, soft, upper-left.
+      {0.22f, 0.22f, 0.20f, 0.55f, 220, 232, 255, 1.4f},
+      // Secondary fill from upper-right, slightly cyan, broader and softer.
+      {0.78f, 0.34f, 0.26f, 0.36f, 168, 208, 248, 1.1f},
+  }};
 
   // Chamfer 3-4 distance transform: how far each opaque pixel sits from the
   // nearest "outside" pixel. The result drives the soft glass rim, the inner
@@ -5242,12 +5395,19 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
     }
   }
 
-  // Tunables for the glass look. Scaled to glyph height so the effect stays
-  // proportional across resolutions.
-  const float rim_softness =
-      std::max(2.5f, static_cast<float>(H) * 0.040f);
-  const float specular_height = 0.24f;
-  const float specular_band = 0.18f;
+  // Tunables for the glass look — see definitions.h for what each constant
+  // does. Rim softness is computed as a fraction of glyph height so the look
+  // stays proportional across resolutions.
+  const float rim_softness = std::max(
+      2.5f, static_cast<float>(H) * START_MENU_LOGO_RIM_SOFTNESS_FACTOR);
+  // Aspect ratio compensation so circular highlights stay circular even
+  // though the surface is much wider than it is tall.
+  const float light_aspect =
+      (W > 0) ? static_cast<float>(H) / static_cast<float>(W) : 1.0f;
+
+  auto mix_toward = [](float channel, Uint8 target, float amount) {
+    return channel + (static_cast<float>(target) - channel) * amount;
+  };
 
   for (int y = 0; y < H; ++y) {
     for (int x = 0; x < W; ++x) {
@@ -5257,9 +5417,13 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
       }
 
       const float progress = static_cast<float>(y) / glyph_height;
-      const SDL_Color base_color = gradient_color(progress);
+      const float ux = (W > 1) ? static_cast<float>(x) /
+                                     static_cast<float>(W - 1)
+                               : 0.0f;
+      const float uy = progress;
+      const SDL_Color base_color = body_color_at(progress);
 
-      // Distance-from-edge in approximate pixel units (chamfer 3-4 has unit
+      // Distance-from-edge in approximate pixel units (chamfer 3-4 uses
       // weight 3 for orthogonal moves).
       const float pixel_distance =
           static_cast<float>(distance_field[static_cast<size_t>(y * W + x)]) /
@@ -5269,57 +5433,106 @@ SDL_Surface *Renderer::createStartLogoSurface(TTF_Font *font,
       // Quarter-circle profile: 0 right at the rim, 1 well inside the body.
       const float rim_curve =
           std::sqrt(std::max(0.0f, 2.0f * rim_t - rim_t * rim_t));
-      const float rim_factor = 1.0f - rim_curve;  // 1 = rim, 0 = interior
+      const float rim_factor = 1.0f - rim_curve;
 
-      // Light from above: top rim catches highlights, bottom rim picks up the
-      // outline color, and the body refracts gently toward the deep color.
+      // Top-of-letter rim catches a cool-white highlight (Fresnel-like).
+      // Bottom rim picks up an almost-black outline so the silhouette stays
+      // legible against any backdrop.
       const float light_split =
-          std::clamp((0.42f - progress) * 2.4f, -1.0f, 1.0f);
-      const float top_rim = rim_factor * std::max(0.0f, light_split) * 0.92f;
+          std::clamp((0.45f - progress) * 2.4f, -1.0f, 1.0f);
+      const float top_rim = rim_factor * std::max(0.0f, light_split) * 0.95f;
       const float bottom_rim =
-          rim_factor * std::max(0.0f, -light_split) * 0.65f;
+          rim_factor * std::max(0.0f, -light_split) * 0.70f;
+      // A subtle cyan refraction band right at the rim, on every side. Makes
+      // the edge look like it bends light, which is a key glass cue.
+      const float refraction_band =
+          rim_factor * std::pow(rim_factor, 1.6f) *
+          START_MENU_LOGO_REFRACTION_STRENGTH;
 
-      // Specular sweep: a soft horizontal sheen sitting above the midline. It
-      // peaks in the body of each glyph (rim_curve high) and fades over the
-      // rim so it never bleeds outside the letter shape.
-      const float spec_arg = (progress - specular_height) / specular_band;
-      const float specular =
-          std::exp(-spec_arg * spec_arg) * std::pow(rim_curve, 1.6f) * 0.55f;
+      // Multi-light specular accumulation. Each light adds an additive,
+      // colored hot-spot. The whole stack is gated by rim_curve so the
+      // reflections live on the "flat top" of the glass and never spill over
+      // the rounded rim.
+      float light_r = 0.0f;
+      float light_g = 0.0f;
+      float light_b = 0.0f;
+      float light_total = 0.0f;
+      for (const GlassLight &light : kGlassLights) {
+        const float dx = ux - light.nx;
+        const float dy = (uy - light.ny) * light_aspect;
+        const float falloff =
+            std::exp(-(dx * dx + dy * dy) /
+                     (2.0f * light.sigma * light.sigma));
+        const float shaped =
+            std::pow(falloff, light.power) * light.intensity *
+            START_MENU_LOGO_LIGHT_INTENSITY;
+        light_r += static_cast<float>(light.r) * shaped;
+        light_g += static_cast<float>(light.g) * shaped;
+        light_b += static_cast<float>(light.b) * shaped;
+        light_total += shaped;
+      }
+      const float body_gate =
+          std::pow(rim_curve, START_MENU_LOGO_LIGHT_GATE_EXPONENT);
+      light_r *= body_gate;
+      light_g *= body_gate;
+      light_b *= body_gate;
+      light_total *= body_gate;
 
-      // Inner refraction: very deep glass tint near the geometric center,
-      // giving the letter visual depth instead of a flat fill.
-      const float inner_depth = rim_curve * (0.18f + 0.22f * progress);
+      // Inner refraction: deepens the glass toward the geometric center so
+      // the body reads as volume rather than a flat fill.
+      const float inner_depth =
+          rim_curve * (START_MENU_LOGO_INNER_DEPTH_BASE +
+                       START_MENU_LOGO_INNER_DEPTH_RAMP * progress);
 
       float r = base_color.r;
       float g = base_color.g;
       float b = base_color.b;
 
-      auto mix_toward = [](float channel, Uint8 target, float amount) {
-        return channel + (static_cast<float>(target) - channel) * amount;
-      };
+      r = mix_toward(r, START_MENU_LOGO_BODY_DEEP_COLOR.r, inner_depth);
+      g = mix_toward(g, START_MENU_LOGO_BODY_DEEP_COLOR.g, inner_depth);
+      b = mix_toward(b, START_MENU_LOGO_BODY_DEEP_COLOR.b, inner_depth);
 
-      r = mix_toward(r, kStartLogoDeepColor.r, inner_depth);
-      g = mix_toward(g, kStartLogoDeepColor.g, inner_depth);
-      b = mix_toward(b, kStartLogoDeepColor.b, inner_depth);
+      r = mix_toward(r, START_MENU_LOGO_RIM_HIGHLIGHT_COLOR.r, top_rim);
+      g = mix_toward(g, START_MENU_LOGO_RIM_HIGHLIGHT_COLOR.g, top_rim);
+      b = mix_toward(b, START_MENU_LOGO_RIM_HIGHLIGHT_COLOR.b, top_rim);
 
-      r = mix_toward(r, kStartLogoHighlightColor.r, top_rim);
-      g = mix_toward(g, kStartLogoHighlightColor.g, top_rim);
-      b = mix_toward(b, kStartLogoHighlightColor.b, top_rim);
+      r = mix_toward(r, START_MENU_LOGO_RIM_SHADOW_COLOR.r, bottom_rim);
+      g = mix_toward(g, START_MENU_LOGO_RIM_SHADOW_COLOR.g, bottom_rim);
+      b = mix_toward(b, START_MENU_LOGO_RIM_SHADOW_COLOR.b, bottom_rim);
 
-      r = mix_toward(r, kStartLogoOutlineColor.r, bottom_rim);
-      g = mix_toward(g, kStartLogoOutlineColor.g, bottom_rim);
-      b = mix_toward(b, kStartLogoOutlineColor.b, bottom_rim);
+      r = mix_toward(r, START_MENU_LOGO_RIM_REFRACTION_COLOR.r,
+                     refraction_band);
+      g = mix_toward(g, START_MENU_LOGO_RIM_REFRACTION_COLOR.g,
+                     refraction_band);
+      b = mix_toward(b, START_MENU_LOGO_RIM_REFRACTION_COLOR.b,
+                     refraction_band);
 
-      r = mix_toward(r, 255, specular);
-      g = mix_toward(g, 255, specular);
-      b = mix_toward(b, 255, specular);
+      // Add the multi-light reflections (additive on top of the body color).
+      r += light_r;
+      g += light_g;
+      b += light_b;
 
       const int red = std::clamp(static_cast<int>(std::lround(r)), 0, 255);
       const int green = std::clamp(static_cast<int>(std::lround(g)), 0, 255);
       const int blue = std::clamp(static_cast<int>(std::lround(b)), 0, 255);
 
+      // Translucency: rim ~ START_MENU_LOGO_RIM_ALPHA, deep body ~
+      // START_MENU_LOGO_BODY_ALPHA. Specular peaks pull the alpha back up so
+      // reflections still punch through the otherwise see-through body.
+      const float alpha_mul = std::clamp(
+          START_MENU_LOGO_BODY_ALPHA +
+              (START_MENU_LOGO_RIM_ALPHA - START_MENU_LOGO_BODY_ALPHA) *
+                  rim_factor +
+              std::min(0.55f, light_total * 0.40f) * (1.0f - rim_factor),
+          0.0f, 1.0f);
+      const Uint8 out_alpha = static_cast<Uint8>(
+          std::clamp(static_cast<int>(std::lround(static_cast<float>(alpha) *
+                                                  alpha_mul)),
+                     0, 255));
+
       writePixel(output_surface, x, y,
-                 SDL_MapRGBA(output_surface->format, red, green, blue, alpha));
+                 SDL_MapRGBA(output_surface->format, red, green, blue,
+                             out_alpha));
     }
   }
 

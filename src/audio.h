@@ -82,6 +82,9 @@ public:
   void PlayNuclearBombAlarm();
   void PlayNuclearBombDrop();
   void PlayNuclearBombExplosion();
+  void PlayAlienLaser();
+  void PlayAlienScream();
+  void PlayAlienExplosion();
   void PlayPunch();
   void PlayGoatBleat();
   void PlayRubbleCrash();
@@ -149,6 +152,9 @@ private:
   Mix_Chunk *SFX_nuclear_bomb_alarm;
   Mix_Chunk *SFX_nuclear_bomb_drop;
   Mix_Chunk *SFX_nuclear_bomb_explosion;
+  Mix_Chunk *SFX_alien_laser;
+  Mix_Chunk *SFX_alien_scream;
+  Mix_Chunk *SFX_alien_explosion;
   Mix_Chunk *SFX_invulnerability_loop;
   Mix_Chunk *SFX_punch;
   Mix_Chunk *SFX_goat_bleat;

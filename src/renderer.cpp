@@ -59,6 +59,8 @@ const SDL_Color kTeleporterYellow{244, 214, 88, 255};
 constexpr double kLogoPi = 3.14159265358979323846;
 constexpr int kPacmanFramesPerDirection = 4;
 constexpr int kMonsterFramesPerDirection = 4;
+constexpr int kAlienAnimationFrames = ALIEN_ANIMATION_FRAME_COUNT;
+constexpr int kAlienExplosionFrames = ALIEN_EXPLOSION_FRAME_ASSET_COUNT;
 constexpr int kRocketFlightFrames = 2;
 constexpr int kAirstrikeExplosionFrames = 5;
 constexpr int kMonsterExplosionFrames = MONSTER_EXPLOSION_FRAME_COUNT;
@@ -73,6 +75,7 @@ constexpr Uint8 kSlimeBallBaseAlpha = 176;
 constexpr Uint8 kSlimeOverlayBaseAlpha = 140;
 constexpr Uint8 kSlimeSplashBaseAlpha = 176;
 constexpr double kMonsterRenderScale = 1.19;
+constexpr double kAlienRenderScale = ALIEN_RENDER_SCALE;
 constexpr double kFartCloudRenderScale = 1.20;
 constexpr double kSlimeBallRenderScale = 1.00;
 constexpr double kSlimeOverlayRenderScale = 1.22;
@@ -96,6 +99,24 @@ constexpr std::array<MonsterSpriteDescriptor, 5> kMonsterSpriteDescriptors{{
     {MONSTER_MANY, "red"},
     {MONSTER_EXTRA, "green"},
     {GOAT, "goat"},
+}};
+
+constexpr std::array<const char *, 15> kAlienThoughts{{
+    "Ich bin Mika, und mein Kopf ist nur Deko.",
+    "Ich bin Mika, und selbst Staub denkt schneller.",
+    "Ich bin Mika, und ich verliere gegen Tueren.",
+    "Ich bin Mika, und mein Plan ist weggelaufen.",
+    "Ich bin Mika, und mein Hirn macht Mittag.",
+    "Ich bin Mika, und ich bin der Beweis gegen Evolution.",
+    "Ich bin Mika, und sogar Sackgassen meiden mich.",
+    "Ich bin Mika, und mein IQ stolpert barfuss.",
+    "Ich bin Mika, und Denken ist bei mir Deko.",
+    "Ich bin Mika, und ich verwirre sogar mich.",
+    "Ich bin Mika, und mein Talent ist Scheitern.",
+    "Ich bin Mika, und ich stehe dumm im Weg.",
+    "Ich bin Mika, und mein Mut hat gekuendigt.",
+    "Ich bin Mika, und jeder Kompass gibt auf.",
+    "Ich bin Mika, und mein Gehirn laeuft rueckwaerts.",
 }};
 
 SDL_Rect makeProjectedFaceRect(SDL_FPoint top_left, SDL_FPoint top_right,
@@ -189,7 +210,7 @@ void configureSmoothTextureSampling(SDL_Texture *texture) {
     return;
   }
 #if SDL_VERSION_ATLEAST(2, 0, 12)
-  SDL_SetTextureScaleMode(texture, SDL_ScaleModeBest);
+  SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
 #endif
 }
 
@@ -306,6 +327,93 @@ SDL_Rect MonsterRenderRect(const PixelCoord &monster_px, int element_size) {
   const int offset = (element_size - render_size) / 2;
   return SDL_Rect{monster_px.x + offset, monster_px.y + offset, render_size,
                   render_size};
+}
+
+SDL_Point TextureRenderSize(int max_size, const SDL_Point &source_size) {
+  int render_w = max_size;
+  int render_h = max_size;
+  if (source_size.x > 0 && source_size.y > 0) {
+    if (source_size.x >= source_size.y) {
+      render_h = std::max(
+          1, static_cast<int>(std::lround(
+                 static_cast<double>(max_size) * source_size.y /
+                 static_cast<double>(source_size.x))));
+    } else {
+      render_w = std::max(
+          1, static_cast<int>(std::lround(
+                 static_cast<double>(max_size) * source_size.x /
+                 static_cast<double>(source_size.y))));
+    }
+  }
+
+  return SDL_Point{render_w, render_h};
+}
+
+SDL_FPoint TextureScaleFactors(double max_scale, const SDL_Point &source_size) {
+  SDL_FPoint result{static_cast<float>(max_scale),
+                    static_cast<float>(max_scale)};
+  if (source_size.x <= 0 || source_size.y <= 0) {
+    return result;
+  }
+
+  if (source_size.x >= source_size.y) {
+    result.y = static_cast<float>(
+        max_scale * static_cast<double>(source_size.y) /
+        static_cast<double>(source_size.x));
+  } else {
+    result.x = static_cast<float>(
+        max_scale * static_cast<double>(source_size.x) /
+        static_cast<double>(source_size.y));
+  }
+  return result;
+}
+
+size_t AlienTextureIndexForFrame(int frame_index) {
+  const int normalized_frame =
+      ((frame_index % kAlienAnimationFrames) + kAlienAnimationFrames) %
+      kAlienAnimationFrames;
+  return static_cast<size_t>(normalized_frame);
+}
+
+SDL_Rect AlienRenderRect(const PixelCoord &alien_px, int element_size,
+                         const SDL_Point &source_size) {
+  const int max_size = std::max(
+      1, static_cast<int>(std::lround(element_size * kAlienRenderScale)));
+  const SDL_Point render_size = TextureRenderSize(max_size, source_size);
+  const int center_x = alien_px.x + element_size / 2;
+  const int anchor_y = alien_px.y + (element_size + max_size) / 2;
+  return SDL_Rect{center_x - render_size.x / 2, anchor_y - render_size.y,
+                  render_size.x, render_size.y};
+}
+
+SDL_Rect BottomAnchoredTextureRect(int center_x, int anchor_y, int max_size,
+                                   const SDL_Point &source_size) {
+  const SDL_Point render_size = TextureRenderSize(max_size, source_size);
+  return SDL_Rect{center_x - render_size.x / 2, anchor_y - render_size.y,
+                  render_size.x, render_size.y};
+}
+
+SDL_Rect AlienExplosionRenderRect(const PixelCoord &alien_px, int element_size,
+                                  const SDL_Point &source_size,
+                                  double scale_multiplier = 1.0) {
+  const int render_size = std::max(
+      1, static_cast<int>(std::lround(
+             element_size * ALIEN_EXPLOSION_RENDER_SCALE * scale_multiplier)));
+  const int center_x = alien_px.x + element_size / 2;
+  const int anchor_y =
+      alien_px.y + element_size / 2 +
+      static_cast<int>(std::lround(element_size * 0.18));
+  return BottomAnchoredTextureRect(center_x, anchor_y, render_size,
+                                   source_size);
+}
+
+bool AlienExplosionResidueVisible(const AlienAgent &alien, Uint32 now) {
+  if (alien.is_alive || !alien.explosion_spawned ||
+      alien.explosion_trigger_ticks == 0 ||
+      now < alien.explosion_trigger_ticks) {
+    return false;
+  }
+  return now - alien.explosion_trigger_ticks >= ALIEN_EXPLOSION_DURATION_MS;
 }
 
 SDL_Color TeleporterColor(char teleporter_digit) {
@@ -548,7 +656,8 @@ void Renderer::initializeRenderer(size_t row_count_value,
     SDL_FreeSurface(app_icon_surface);
   }
 
-  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "2");
+  SDL_SetHintWithPriority(SDL_HINT_RENDER_SCALE_QUALITY, "2",
+                          SDL_HINT_OVERRIDE);
   sdl_renderer = SDL_CreateRenderer(
       sdl_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (sdl_renderer == nullptr) {
@@ -746,6 +855,41 @@ void Renderer::initializeRenderer(size_t row_count_value,
     configureSmoothTextureSampling(goat_texture);
     sdl_goat_jumping_textures.push_back(goat_texture);
   }
+  sdl_alien_textures.clear();
+  sdl_alien_sizes.clear();
+  sdl_alien_textures.reserve(ALIEN_FRAME_ASSET_PATHS.size());
+  sdl_alien_sizes.reserve(ALIEN_FRAME_ASSET_PATHS.size());
+  for (const char *relative_path : ALIEN_FRAME_ASSET_PATHS) {
+    SDL_Point alien_size{0, 0};
+    SDL_Texture *alien_texture = loadTrimmedChromaKeyTexture(
+        Paths::GetDataFilePath(relative_path), alien_size,
+        ALIEN_CHROMA_KEY_TOLERANCE);
+    if (alien_texture == nullptr) {
+      std::cerr << "Could not load alien sprite asset " << relative_path
+                << "\n";
+      exit(1);
+    }
+    sdl_alien_textures.push_back(alien_texture);
+    sdl_alien_sizes.push_back(alien_size);
+  }
+  sdl_alien_explosion_textures.clear();
+  sdl_alien_explosion_sizes.clear();
+  sdl_alien_explosion_textures.reserve(
+      ALIEN_EXPLOSION_FRAME_ASSET_PATHS.size());
+  sdl_alien_explosion_sizes.reserve(ALIEN_EXPLOSION_FRAME_ASSET_PATHS.size());
+  for (const char *relative_path : ALIEN_EXPLOSION_FRAME_ASSET_PATHS) {
+    SDL_Point explosion_size{0, 0};
+    SDL_Texture *explosion_texture = loadTrimmedChromaKeyTexture(
+        Paths::GetDataFilePath(relative_path), explosion_size,
+        ALIEN_CHROMA_KEY_TOLERANCE);
+    if (explosion_texture == nullptr) {
+      std::cerr << "Could not load alien explosion asset " << relative_path
+                << "\n";
+      exit(1);
+    }
+    sdl_alien_explosion_textures.push_back(explosion_texture);
+    sdl_alien_explosion_sizes.push_back(explosion_size);
+  }
 
   const std::string logo_brick_path = Paths::GetDataFilePath("brick.png");
   SDL_Surface *brick_surface = IMG_Load(logo_brick_path.c_str());
@@ -867,6 +1011,16 @@ Renderer::~Renderer() {
   for (SDL_Texture *goat_texture : sdl_goat_jumping_textures) {
     if (goat_texture != nullptr) {
       SDL_DestroyTexture(goat_texture);
+    }
+  }
+  for (SDL_Texture *alien_texture : sdl_alien_textures) {
+    if (alien_texture != nullptr) {
+      SDL_DestroyTexture(alien_texture);
+    }
+  }
+  for (SDL_Texture *alien_explosion_texture : sdl_alien_explosion_textures) {
+    if (alien_explosion_texture != nullptr) {
+      SDL_DestroyTexture(alien_explosion_texture);
     }
   }
   for (SDL_Texture *pacman_texture : sdl_pacman_textures) {
@@ -2470,6 +2624,57 @@ void Renderer::renderFrame(bool show_hud) {
                     });
               });
         }
+        for (const AlienAgent &alien : game->aliens) {
+          const bool residue_visible = AlienExplosionResidueVisible(alien, now);
+          if (!alien.is_alive && alien.explosion_spawned && !residue_visible) {
+            continue;
+          }
+
+          SDL_Texture *alien_texture = nullptr;
+          SDL_Point source_size{0, 0};
+          if (residue_visible && !sdl_alien_explosion_textures.empty()) {
+            alien_texture = sdl_alien_explosion_textures.back();
+            if (!sdl_alien_explosion_sizes.empty()) {
+              source_size = sdl_alien_explosion_sizes.back();
+            }
+          } else if (!sdl_alien_textures.empty()) {
+            const size_t texture_index =
+                AlienTextureIndexForFrame(getAlienAnimationFrame(alien, now));
+            if (texture_index < sdl_alien_textures.size()) {
+              alien_texture = sdl_alien_textures[texture_index];
+            }
+            if (texture_index < sdl_alien_sizes.size()) {
+              source_size = sdl_alien_sizes[texture_index];
+            }
+          }
+          if (alien_texture == nullptr) {
+            continue;
+          }
+
+          const double bob_cells = 0.0;
+          const double render_scale =
+              residue_visible ? ALIEN_EXPLOSION_RENDER_SCALE *
+                                    ALIEN_EXPLOSION_FINAL_FRAME_SCALE
+                              : kAlienRenderScale;
+          const SDL_FPoint render_scales =
+              TextureScaleFactors(render_scale, source_size);
+          SDL_Rect alien_rect =
+              makeBillboardRect(alien.coord.v, alien.coord.u,
+                                render_scales.x, render_scales.y,
+                                kSpriteFootRowFactor, 0.0, bob_cells);
+          const double depth =
+              projectScene(0.5, alien.coord.u + kSpriteFootRowFactor, 0.0).y;
+          push_depth_command(depth,
+                             [this, alien_texture, alien_rect, alien]() {
+            drawWithWallOcclusion(
+                expandRect(alien_rect, std::max(8, element_size / 4)),
+                static_cast<double>(alien.coord.u) + 0.5,
+                [&]() {
+                  SDL_RenderCopy(sdl_renderer, alien_texture, nullptr,
+                                 &alien_rect);
+                });
+          });
+        }
       } else {
         for (int i = 0; i < map->get_number_goodies(); i++) {
           const MapCoord coord = map->get_coord_goodie(i);
@@ -2627,6 +2832,26 @@ void Renderer::renderFrame(bool show_hud) {
               static_cast<int>(element_size * STUN_STARS_RADIUS_CELLS),
             stars_now);
         }
+        for (const AlienAgent &alien : game->aliens) {
+          if (!alien.is_alive) {
+            continue;
+          }
+          SDL_Point source_size{0, 0};
+          if (!sdl_alien_textures.empty()) {
+            const size_t texture_index =
+                AlienTextureIndexForFrame(getAlienAnimationFrame(alien, stars_now));
+            if (texture_index < sdl_alien_sizes.size()) {
+              source_size = sdl_alien_sizes[texture_index];
+            }
+          }
+          const SDL_FPoint render_scales =
+              TextureScaleFactors(kAlienRenderScale, source_size);
+          const SDL_Rect alien_rect =
+              makeBillboardRect(alien.coord.v, alien.coord.u,
+                                render_scales.x, render_scales.y,
+                                kSpriteFootRowFactor);
+          drawAlienThoughtBubble(alien, alien_rect, stars_now);
+        }
       }
 
       if (game != nullptr && (game->dead ||
@@ -2643,6 +2868,7 @@ void Renderer::renderFrame(bool show_hud) {
       drawactiveairstrike();
       drawActiveNuclearBombDrop();
       drawbiohazardbeam();
+      drawalienlaser();
       draweffects();
       drawExplosionParticles();
     }
@@ -2670,7 +2896,9 @@ void Renderer::renderFrame(bool show_hud) {
     drawplaceddynamites();
     drawplacedplasticexplosive();
     drawmonsters();
+    drawaliens();
     drawbiohazardbeam();
+    drawalienlaser();
     drawgasclouds();
     drawfireballs();
     drawslimeballs();
@@ -4335,6 +4563,39 @@ SDL_Texture *Renderer::getStunnedGoatTexture() {
   return sdl_monster_textures[idx];
 }
 
+int Renderer::getAlienAnimationFrame(const AlienAgent &alien, Uint32 now) const {
+  if (sdl_alien_textures.empty()) {
+    return 0;
+  }
+
+  if (alien.animation_started_ticks == 0 ||
+      now < alien.animation_started_ticks ||
+      now >= alien.animation_until_ticks) {
+    return 0;
+  }
+
+  const Uint32 frame_duration_ms = ALIEN_IDLE_ANIMATION_FRAME_MS;
+  const Uint32 elapsed = now - alien.animation_started_ticks;
+  const Uint32 total_offset =
+      static_cast<Uint32>((alien.animation_seed * 137) % frame_duration_ms);
+  const Uint32 frame_clock = elapsed + total_offset;
+  return static_cast<int>((frame_clock / frame_duration_ms) %
+                          kAlienAnimationFrames);
+}
+
+SDL_Texture *Renderer::getAlienTexture(const AlienAgent &alien, Uint32 now) {
+  if (sdl_alien_textures.empty()) {
+    return nullptr;
+  }
+
+  const int frame_index = getAlienAnimationFrame(alien, now);
+  const size_t texture_index = AlienTextureIndexForFrame(frame_index);
+  if (texture_index >= sdl_alien_textures.size()) {
+    return nullptr;
+  }
+  return sdl_alien_textures[texture_index];
+}
+
 void Renderer::renderSimpleText(TTF_Font *font, const std::string &text,
                                 const SDL_Color &color, int center_x,
                                 int top_y) {
@@ -4706,26 +4967,36 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
     const double randomized_scale =
         sparkle.min_scale +
         random_fraction(31.0) * (sparkle.max_scale - sparkle.min_scale);
+    const float arm_factor =
+        std::max(0.0f, START_MENU_LOGO_SPARKLE_ARM_LENGTH_FACTOR);
+    const float thickness_factor =
+        std::max(0.0f, START_MENU_LOGO_SPARKLE_THICKNESS_FACTOR);
+    const float alpha_factor =
+        std::max(0.0f, START_MENU_LOGO_SPARKLE_ALPHA_FACTOR);
     const int halo_arm = std::max(
-        5, static_cast<int>(std::lround(logo_height * 0.126 * randomized_scale *
-                                        (0.40 + intensity * 0.92))));
+        2, static_cast<int>(std::lround(logo_height * 0.126 * randomized_scale *
+                                        (0.40 + intensity * 0.92) *
+                                        arm_factor)));
     const int major_arm = std::max(
-        4, static_cast<int>(std::lround(logo_height * 0.104 * randomized_scale *
-                                        (0.50 + intensity * 0.86))));
+        2, static_cast<int>(std::lround(logo_height * 0.104 * randomized_scale *
+                                        (0.50 + intensity * 0.86) *
+                                        arm_factor)));
     const int inner_arm = std::max(
-        2, static_cast<int>(std::lround(major_arm *
+        1, static_cast<int>(std::lround(major_arm *
                                         (0.46 + random_fraction(41.0) * 0.16))));
-    const int outer_thickness = std::max(
-        1, static_cast<int>(std::lround(
-               1.0 + intensity * (1.8 + random_fraction(53.0) * 1.4))));
-    const int inner_thickness = std::max(1, outer_thickness - 1);
-    const Uint8 halo_alpha = static_cast<Uint8>(
-        std::clamp(static_cast<int>(std::lround(150 * intensity + 24)), 0, 255));
-    const Uint8 outer_alpha = static_cast<Uint8>(
-        std::clamp(static_cast<int>(std::lround(228 * intensity + 16)), 0, 255));
-    const Uint8 inner_alpha = static_cast<Uint8>(
-        std::clamp(static_cast<int>(std::lround(255 * std::pow(intensity, 0.86))),
-                   0, 255));
+    const int raw_thickness = static_cast<int>(std::lround(
+        (1.0 + intensity * (1.8 + random_fraction(53.0) * 1.4)) *
+        thickness_factor));
+    const int outer_thickness = std::max(0, raw_thickness);
+    const int inner_thickness = std::max(0, outer_thickness - 1);
+    auto scale_alpha = [&](double base) -> Uint8 {
+      return static_cast<Uint8>(std::clamp(
+          static_cast<int>(std::lround(base * alpha_factor)), 0, 255));
+    };
+    const Uint8 halo_alpha = scale_alpha(150.0 * intensity + 24.0);
+    const Uint8 outer_alpha = scale_alpha(228.0 * intensity + 16.0);
+    const Uint8 inner_alpha =
+        scale_alpha(255.0 * std::pow(intensity, 0.86));
 
     auto draw_four_point_star = [&](const SDL_Color &color, Uint8 alpha,
                                     int arm_length, int thickness) {
@@ -4778,7 +5049,8 @@ void Renderer::renderStartLogo(TTF_Font *font, const std::string &text,
 
 SDL_Texture *Renderer::loadTrimmedChromaKeyTexture(const std::string &path,
                                                    SDL_Point &trimmed_size,
-                                                   Uint8 tolerance) {
+                                                   Uint8 tolerance,
+                                                   bool trim_to_content) {
   trimmed_size = SDL_Point{0, 0};
   SDL_Surface *raw_surface = IMG_Load(path.c_str());
   if (raw_surface == nullptr) {
@@ -4883,7 +5155,7 @@ SDL_Texture *Renderer::loadTrimmedChromaKeyTexture(const std::string &path,
   }
 
   SDL_Rect trim_rect{0, 0, rgba_surface->w, rgba_surface->h};
-  if (max_x >= min_x && max_y >= min_y) {
+  if (trim_to_content && max_x >= min_x && max_y >= min_y) {
     trim_rect.x = min_x;
     trim_rect.y = min_y;
     trim_rect.w = max_x - min_x + 1;
@@ -7594,6 +7866,204 @@ void Renderer::drawbiohazardbeam() {
   SDL_SetRenderDrawBlendMode(sdl_renderer, previous_blend_mode);
 }
 
+void Renderer::drawalienlaser() {
+  if (game == nullptr || game->dead || game->pacman == nullptr ||
+      !game->active_alien_laser.is_active) {
+    return;
+  }
+
+  const Uint32 now = SDL_GetTicks();
+  const ActiveAlienLaser &laser = game->active_alien_laser;
+  const Directions direction = laser.direction;
+  const PixelCoord pacman_px = getPixelCoord(
+      laser.origin_coord,
+      static_cast<int>(element_size * laser.origin_delta.x / 100.0),
+      static_cast<int>(element_size * laser.origin_delta.y / 100.0));
+  const SDL_Rect pacman_rect{
+      pacman_px.x + static_cast<int>(element_size * 0.05),
+      pacman_px.y + static_cast<int>(element_size * 0.05),
+      static_cast<int>(element_size * 0.9),
+      static_cast<int>(element_size * 0.9)};
+  const int non_character_sprite_lift_px = getNonCharacterSpriteLiftPixels();
+  const float side_beam_raise_px =
+      (direction == Directions::Left || direction == Directions::Right)
+          ? static_cast<float>(element_size * ALIEN_LASER_SIDE_BEAM_RAISE_FACTOR)
+          : 0.0f;
+  const SDL_FPoint start{
+      static_cast<float>(pacman_rect.x + pacman_rect.w / 2),
+      static_cast<float>(pacman_rect.y + pacman_rect.h / 2 -
+                         std::max(2, non_character_sprite_lift_px / 2)) -
+          side_beam_raise_px};
+  SDL_FPoint end =
+      ENABLE_3D_VIEW
+          ? projectScene(laser.end_world_center.x, laser.end_world_center.y,
+                         0.0)
+          : SDL_FPoint{static_cast<float>(
+                           offset_x + 1 +
+                           laser.end_world_center.x *
+                               static_cast<float>(element_size + 1)),
+                       static_cast<float>(
+                           offset_y + 1 +
+                           laser.end_world_center.y *
+                               static_cast<float>(element_size + 1))};
+  switch (direction) {
+  case Directions::Left:
+  case Directions::Right:
+    end.y = start.y;
+    break;
+  case Directions::Up:
+  case Directions::Down:
+    end.x = start.x;
+    break;
+  case Directions::None:
+  default:
+    break;
+  }
+
+  const double visible_duration = static_cast<double>(
+      std::max<Uint32>(1, laser.visible_until_ticks - laser.started_ticks));
+  const double progress =
+      std::clamp(static_cast<double>(now - laser.started_ticks) /
+                     visible_duration,
+                 0.0, 1.0);
+  const double flash = std::sin(progress * M_PI);
+  const double alpha_scale =
+      std::clamp(0.30 + flash * 0.95, 0.0, 1.0);
+  SDL_FPoint beam_start = start;
+  const Uint32 sink_started_ticks =
+      laser.started_ticks + ALIEN_LASER_SINK_START_DELAY_MS;
+  if (now >= sink_started_ticks &&
+      laser.visible_until_ticks > sink_started_ticks) {
+    const double sink_progress =
+        std::pow(std::clamp(static_cast<double>(now - sink_started_ticks) /
+                                static_cast<double>(laser.visible_until_ticks -
+                                                    sink_started_ticks),
+                            0.0, 1.0),
+                 1.25);
+    beam_start.x =
+        static_cast<float>(start.x + (end.x - start.x) * sink_progress);
+    beam_start.y =
+        static_cast<float>(start.y + (end.y - start.y) * sink_progress);
+  }
+  const double axis_x = static_cast<double>(end.x - beam_start.x);
+  const double axis_y = static_cast<double>(end.y - beam_start.y);
+  const double axis_length = std::hypot(axis_x, axis_y);
+  if (axis_length < 2.0) {
+    return;
+  }
+
+  const double normal_x = -axis_y / axis_length;
+  const double normal_y = axis_x / axis_length;
+  const double beam_clock =
+      static_cast<double>(now + laser.animation_seed * 17) / 95.0;
+
+  SDL_BlendMode previous_blend_mode = SDL_BLENDMODE_NONE;
+  SDL_GetRenderDrawBlendMode(sdl_renderer, &previous_blend_mode);
+  SDL_SetRenderDrawBlendMode(sdl_renderer, SDL_BLENDMODE_BLEND);
+
+  auto draw_thick_line = [&](SDL_FPoint a, SDL_FPoint b, SDL_Color color,
+                             int half_width_px) {
+    for (int offset = -half_width_px; offset <= half_width_px; ++offset) {
+      const double edge =
+          1.0 - std::abs(offset) / static_cast<double>(half_width_px + 1);
+      SDL_Color mod_color = color;
+      mod_color.a = static_cast<Uint8>(
+          std::clamp(static_cast<double>(color.a) * edge * alpha_scale, 0.0,
+                     255.0));
+      SDL_RenderDrawAALine(
+          sdl_renderer, a.x + normal_x * offset, a.y + normal_y * offset,
+          b.x + normal_x * offset, b.y + normal_y * offset, mod_color);
+    }
+  };
+
+  const int halo_width = std::max(8, static_cast<int>(element_size * 0.34));
+  const int flame_width = std::max(5, static_cast<int>(element_size * 0.22));
+  const int core_width = std::max(2, static_cast<int>(element_size * 0.09));
+  draw_thick_line(beam_start, end, SDL_Color{255, 46, 12, 120}, halo_width);
+  draw_thick_line(beam_start, end, SDL_Color{255, 118, 22, 175}, flame_width);
+  draw_thick_line(beam_start, end, SDL_Color{255, 238, 94, 235}, core_width);
+  draw_thick_line(beam_start, end, SDL_Color{255, 252, 216, 245},
+                  std::max(1, core_width / 2));
+
+  struct FlameWave {
+    SDL_Color color;
+    double amplitude_factor;
+    double frequency;
+    double phase_offset;
+    int half_width;
+  };
+
+  const std::array<FlameWave, 8> waves{{
+      {SDL_Color{255, 28, 8, 130}, 0.46, 1.0, 0.0, halo_width / 2},
+      {SDL_Color{255, 72, 12, 150}, 0.38, 1.7, 0.7, halo_width / 3},
+      {SDL_Color{255, 124, 18, 172}, 0.30, 2.4, 1.4, flame_width / 2},
+      {SDL_Color{255, 168, 34, 188}, 0.24, 3.1, 2.1, flame_width / 3},
+      {SDL_Color{255, 214, 68, 205}, 0.18, 3.9, 2.8, core_width + 1},
+      {SDL_Color{255, 246, 138, 220}, 0.13, 4.7, 3.5, core_width},
+      {SDL_Color{255, 255, 210, 235}, 0.08, 5.9, 4.2,
+       std::max(1, core_width / 2)},
+      {SDL_Color{255, 62, 18, 145}, 0.52, 0.65, 5.0, halo_width / 3},
+  }};
+
+  for (const FlameWave &wave : waves) {
+    const double amplitude =
+        std::max(3.0, element_size * wave.amplitude_factor);
+    const double phase = beam_clock * (1.2 + wave.frequency * 0.25) +
+                         wave.phase_offset;
+    SDL_FPoint previous = beam_start;
+    for (int sample = 1; sample <= 84; ++sample) {
+      const double t = static_cast<double>(sample) / 84.0;
+      const double envelope = std::sin(t * M_PI);
+      const double wave_value =
+          std::sin(t * wave.frequency * 2.0 * M_PI + phase) +
+          0.42 * std::sin(t * wave.frequency * 5.0 * M_PI - phase * 0.7);
+      const double offset = amplitude * envelope * wave_value;
+      SDL_FPoint current{
+          static_cast<float>(beam_start.x + axis_x * t + normal_x * offset),
+          static_cast<float>(beam_start.y + axis_y * t + normal_y * offset)};
+      draw_thick_line(previous, current, wave.color,
+                      std::max(1, wave.half_width));
+      previous = current;
+    }
+  }
+
+  for (int burst = 0; burst < 7; ++burst) {
+    const double t = std::fmod(beam_clock * 0.18 + burst * 0.142, 1.0);
+    const double radius_pulse = 0.78 + 0.28 * std::sin(beam_clock + burst);
+    const int pulse_x =
+        static_cast<int>(std::lround(beam_start.x + axis_x * t));
+    const int pulse_y =
+        static_cast<int>(std::lround(beam_start.y + axis_y * t));
+    const int outer_radius =
+        std::max(4, static_cast<int>(element_size * 0.17 * radius_pulse));
+    SDL_SetRenderDrawColor(
+        sdl_renderer, 255, 76, 10,
+        static_cast<Uint8>(std::clamp(130.0 * alpha_scale, 0.0, 180.0)));
+    SDL_RenderFillCircle(sdl_renderer, pulse_x, pulse_y, outer_radius);
+    SDL_SetRenderDrawColor(
+        sdl_renderer, 255, 236, 96,
+        static_cast<Uint8>(std::clamp(220.0 * alpha_scale, 0.0, 240.0)));
+    SDL_RenderFillCircle(sdl_renderer, pulse_x, pulse_y,
+                         std::max(2, outer_radius / 2));
+  }
+
+  const int impact_x = static_cast<int>(std::lround(end.x));
+  const int impact_y = static_cast<int>(std::lround(end.y));
+  const int impact_radius =
+      std::max(10, static_cast<int>(element_size * (0.34 + flash * 0.34)));
+  SDL_SetRenderDrawColor(
+      sdl_renderer, 255, 54, 8,
+      static_cast<Uint8>(std::clamp(140.0 * alpha_scale, 0.0, 180.0)));
+  SDL_RenderFillCircle(sdl_renderer, impact_x, impact_y, impact_radius);
+  SDL_SetRenderDrawColor(
+      sdl_renderer, 255, 228, 92,
+      static_cast<Uint8>(std::clamp(230.0 * alpha_scale, 0.0, 245.0)));
+  SDL_RenderFillCircle(sdl_renderer, impact_x, impact_y,
+                       std::max(4, impact_radius / 2));
+
+  SDL_SetRenderDrawBlendMode(sdl_renderer, previous_blend_mode);
+}
+
 void Renderer::drawStunStars(int center_x, int center_y, int orbit_radius_px,
                              int star_radius_px, Uint32 now) {
   if (orbit_radius_px <= 0 || star_radius_px <= 0) {
@@ -7662,6 +8132,203 @@ void Renderer::drawPulsingHeart(int center_x, int center_y, int size_px,
   SDL_SetRenderDrawColor(sdl_renderer, 255, 152, 164, alpha / 2);
   SDL_RenderDrawCircle(sdl_renderer, center_x - radius, top_y, radius);
   SDL_RenderDrawCircle(sdl_renderer, center_x + radius, top_y, radius);
+
+  SDL_SetRenderDrawBlendMode(sdl_renderer, previous_blend_mode);
+}
+
+void Renderer::drawAlienThoughtBubble(const AlienAgent &alien,
+                                      const SDL_Rect &alien_rect,
+                                      Uint32 now) {
+  if (!alien.is_alive || alien.thought_index < 0 ||
+      alien.thought_index >= static_cast<int>(kAlienThoughts.size()) ||
+      alien.thought_started_ticks == 0 ||
+      alien.thought_visible_until_ticks == 0 ||
+      now >= alien.thought_visible_until_ticks + ALIEN_THOUGHT_FADE_MS) {
+    return;
+  }
+
+  const Uint32 fade_in_ms = std::min<Uint32>(350, ALIEN_THOUGHT_FADE_MS);
+  const double fade_in =
+      std::clamp(static_cast<double>(now - alien.thought_started_ticks) /
+                     static_cast<double>(std::max<Uint32>(1, fade_in_ms)),
+                 0.0, 1.0);
+  double fade_out = 1.0;
+  if (now > alien.thought_visible_until_ticks) {
+    fade_out =
+        1.0 - std::clamp(static_cast<double>(now -
+                                             alien.thought_visible_until_ticks) /
+                             static_cast<double>(
+                                 std::max<Uint32>(1, ALIEN_THOUGHT_FADE_MS)),
+                         0.0, 1.0);
+  }
+  const double alpha_scale = std::clamp(fade_in * fade_out, 0.0, 1.0);
+  if (alpha_scale <= 0.01) {
+    return;
+  }
+
+  const std::string text =
+      kAlienThoughts[static_cast<size_t>(alien.thought_index)];
+  const double text_scale = 0.52;
+  const int padding_x = std::max(5, element_size / 10);
+  const int padding_y = std::max(4, element_size / 14);
+  const int max_rendered_text_width =
+      std::clamp(static_cast<int>(std::lround(element_size * 2.45)), 82, 140);
+  const int max_text_width =
+      std::max(1, static_cast<int>(
+                      std::lround(max_rendered_text_width / text_scale)));
+  const int font_height = std::max(1, TTF_FontHeight(sdl_font_hud));
+  const int line_height =
+      std::max(8, static_cast<int>(std::lround(font_height * text_scale)));
+
+  std::vector<std::string> lines;
+  std::string current_line;
+  size_t word_start = 0;
+  while (word_start < text.size()) {
+    const size_t word_end = text.find(' ', word_start);
+    const std::string word =
+        text.substr(word_start, word_end == std::string::npos
+                                    ? std::string::npos
+                                    : word_end - word_start);
+    const std::string candidate =
+        current_line.empty() ? word : current_line + " " + word;
+    int candidate_width = 0;
+    TTF_SizeText(sdl_font_hud, candidate.c_str(), &candidate_width, nullptr);
+    if (!current_line.empty() && candidate_width > max_text_width) {
+      lines.push_back(current_line);
+      current_line = word;
+    } else {
+      current_line = candidate;
+    }
+    if (word_end == std::string::npos) {
+      break;
+    }
+    word_start = word_end + 1;
+  }
+  if (!current_line.empty()) {
+    lines.push_back(current_line);
+  }
+  if (lines.empty()) {
+    return;
+  }
+
+  int text_width = 0;
+  for (const std::string &line : lines) {
+    int line_width = 0;
+    TTF_SizeText(sdl_font_hud, line.c_str(), &line_width, nullptr);
+    text_width = std::max(text_width, line_width);
+  }
+
+  const int rendered_text_width =
+      static_cast<int>(std::lround(text_width * text_scale));
+  const int bubble_w =
+      std::min(screen_res_x - 16, rendered_text_width + padding_x * 2);
+  const int bubble_h =
+      static_cast<int>(lines.size()) * line_height + padding_y * 2;
+  int bubble_x = alien_rect.x + alien_rect.w / 2 - bubble_w / 2;
+  int bubble_y = alien_rect.y - bubble_h - std::max(4, element_size / 8);
+  bubble_x = std::clamp(bubble_x, 8, std::max(8, screen_res_x - bubble_w - 8));
+  bubble_y = std::clamp(bubble_y, 8, std::max(8, screen_res_y - bubble_h - 8));
+  const SDL_Rect bubble_rect{bubble_x, bubble_y, bubble_w, bubble_h};
+
+  SDL_BlendMode previous_blend_mode = SDL_BLENDMODE_NONE;
+  SDL_GetRenderDrawBlendMode(sdl_renderer, &previous_blend_mode);
+  SDL_SetRenderDrawBlendMode(sdl_renderer, SDL_BLENDMODE_BLEND);
+
+  const Uint8 fill_alpha =
+      static_cast<Uint8>(std::clamp(220.0 * alpha_scale, 0.0, 220.0));
+  const Uint8 outline_alpha =
+      static_cast<Uint8>(std::clamp(230.0 * alpha_scale, 0.0, 230.0));
+  const Uint8 text_alpha =
+      static_cast<Uint8>(std::clamp(255.0 * alpha_scale, 0.0, 255.0));
+
+  const int min_lobe_radius = std::max(3, bubble_h / 10);
+  struct CloudLobe {
+    double x_factor;
+    double y_factor;
+    double radius_factor;
+  };
+  const std::array<CloudLobe, 9> lobes{{
+      {0.14, 0.58, 0.20},
+      {0.25, 0.32, 0.23},
+      {0.42, 0.23, 0.25},
+      {0.61, 0.24, 0.24},
+      {0.78, 0.36, 0.22},
+      {0.87, 0.62, 0.19},
+      {0.68, 0.78, 0.21},
+      {0.43, 0.80, 0.23},
+      {0.20, 0.73, 0.19},
+  }};
+
+  auto draw_cloud_shape = [&](SDL_Color color, int radius_delta,
+                              int inset) {
+    SDL_SetRenderDrawColor(sdl_renderer, color.r, color.g, color.b, color.a);
+    const SDL_Rect core_rect{bubble_rect.x + inset + bubble_h / 5,
+                             bubble_rect.y + inset + bubble_h / 5,
+                             std::max(1, bubble_rect.w - bubble_h / 3 -
+                                             inset * 2),
+                             std::max(1, bubble_rect.h * 3 / 5 -
+                                             inset * 2)};
+    const SDL_Rect lower_rect{bubble_rect.x + inset + bubble_h / 4,
+                              bubble_rect.y + inset + bubble_rect.h / 2,
+                              std::max(1, bubble_rect.w - bubble_h / 2 -
+                                              inset * 2),
+                              std::max(1, bubble_rect.h / 3 - inset * 2)};
+    SDL_RenderFillRect(sdl_renderer, &core_rect);
+    SDL_RenderFillRect(sdl_renderer, &lower_rect);
+    for (const CloudLobe &lobe : lobes) {
+      const int radius =
+          std::max(1, min_lobe_radius +
+                          static_cast<int>(std::lround(
+                              bubble_h * lobe.radius_factor)) +
+                          radius_delta);
+      const int center_x = bubble_rect.x + inset +
+                           static_cast<int>(std::lround(
+                               (bubble_rect.w - inset * 2) * lobe.x_factor));
+      const int center_y = bubble_rect.y + inset +
+                           static_cast<int>(std::lround(
+                               (bubble_rect.h - inset * 2) * lobe.y_factor));
+      SDL_RenderFillCircle(sdl_renderer, center_x, center_y, radius);
+    }
+  };
+
+  draw_cloud_shape(SDL_Color{0, 0, 0, outline_alpha}, 1, 0);
+  draw_cloud_shape(SDL_Color{255, 255, 255, fill_alpha}, 0, 1);
+
+  const int cloud_anchor_x =
+      std::clamp(alien_rect.x + alien_rect.w / 2, bubble_rect.x + bubble_w / 5,
+                 bubble_rect.x + bubble_w * 4 / 5);
+  const int cloud_anchor_y = bubble_rect.y + bubble_rect.h;
+  const int figure_anchor_x = alien_rect.x + alien_rect.w / 2;
+  const int figure_anchor_y = alien_rect.y + alien_rect.h / 4;
+  for (int bubble_index = 0; bubble_index < 4; ++bubble_index) {
+    const double t = 0.22 + bubble_index * 0.18;
+    const int center_x = static_cast<int>(std::lround(
+        figure_anchor_x + (cloud_anchor_x - figure_anchor_x) * t));
+    const int center_y = static_cast<int>(std::lround(
+        figure_anchor_y + (cloud_anchor_y - figure_anchor_y) * t));
+    const int radius =
+        std::max(2, static_cast<int>(std::lround(
+                        element_size * (0.020 + bubble_index * 0.010))));
+    SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, outline_alpha);
+    SDL_RenderFillCircle(sdl_renderer, center_x, center_y, radius + 1);
+    SDL_SetRenderDrawColor(sdl_renderer, 255, 255, 255, fill_alpha);
+    SDL_RenderFillCircle(sdl_renderer, center_x, center_y, radius);
+  }
+
+  const SDL_Color text_color{0, 0, 0, text_alpha};
+  int text_y = bubble_rect.y + padding_y;
+  for (const std::string &line : lines) {
+    const TextCache::Entry *entry =
+        text_cache_.GetOrCreate(sdl_renderer, sdl_font_hud, line, text_color);
+    if (entry != nullptr) {
+      const SDL_Rect destination{
+          bubble_rect.x + padding_x, text_y,
+          std::max(1, static_cast<int>(std::lround(entry->w * text_scale))),
+          std::max(1, static_cast<int>(std::lround(entry->h * text_scale)))};
+      SDL_RenderCopy(sdl_renderer, entry->texture, nullptr, &destination);
+    }
+    text_y += line_height;
+  }
 
   SDL_SetRenderDrawBlendMode(sdl_renderer, previous_blend_mode);
 }
@@ -11392,6 +12059,53 @@ void Renderer::drawmonsters() {
   }
 }
 
+void Renderer::drawaliens() {
+  if (game == nullptr) {
+    return;
+  }
+
+  const Uint32 now = SDL_GetTicks();
+  for (const AlienAgent &alien : game->aliens) {
+    const bool residue_visible = AlienExplosionResidueVisible(alien, now);
+    if (!alien.is_alive && alien.explosion_spawned && !residue_visible) {
+      continue;
+    }
+
+    SDL_Texture *alien_texture = nullptr;
+    SDL_Point source_size{0, 0};
+    if (residue_visible && !sdl_alien_explosion_textures.empty()) {
+      alien_texture = sdl_alien_explosion_textures.back();
+      if (!sdl_alien_explosion_sizes.empty()) {
+        source_size = sdl_alien_explosion_sizes.back();
+      }
+    } else if (!sdl_alien_textures.empty()) {
+      const size_t texture_index =
+          AlienTextureIndexForFrame(getAlienAnimationFrame(alien, now));
+      if (texture_index < sdl_alien_textures.size()) {
+        alien_texture = sdl_alien_textures[texture_index];
+      }
+      if (texture_index < sdl_alien_sizes.size()) {
+        source_size = sdl_alien_sizes[texture_index];
+      }
+    }
+    if (alien_texture == nullptr) {
+      continue;
+    }
+
+    const PixelCoord alien_px = getPixelCoord(alien.coord, 0, 0);
+    SDL_Rect alien_rect = AlienRenderRect(alien_px, element_size, source_size);
+    if (residue_visible) {
+      alien_rect = AlienExplosionRenderRect(
+          alien_px, element_size, source_size,
+          ALIEN_EXPLOSION_FINAL_FRAME_SCALE);
+    }
+    SDL_RenderCopy(sdl_renderer, alien_texture, nullptr, &alien_rect);
+    if (alien.is_alive) {
+      drawAlienThoughtBubble(alien, alien_rect, now);
+    }
+  }
+}
+
 void Renderer::drawfireballs() {
   if (game == nullptr || game->dead) {
     return;
@@ -11676,7 +12390,46 @@ void Renderer::draweffects() {
     }
     const Uint32 elapsed = now - effect.started_ticks;
 
-    if (effect.type == EffectType::AirstrikeExplosion) {
+    if (effect.type == EffectType::AlienExplosion) {
+      const double progress =
+          std::clamp(static_cast<double>(elapsed) /
+                         static_cast<double>(
+                             std::max<Uint32>(1, ALIEN_EXPLOSION_DURATION_MS)),
+                     0.0, 1.0);
+      const double bloom = std::sin(progress * M_PI);
+      const int frame_index = std::clamp(
+          static_cast<int>(elapsed /
+                           std::max<Uint32>(1, ALIEN_EXPLOSION_FRAME_MS)),
+          0, kAlienExplosionFrames - 1);
+      const double frame_scale =
+          frame_index == kAlienExplosionFrames - 1
+              ? ALIEN_EXPLOSION_FINAL_FRAME_SCALE
+              : 1.0;
+      const int render_size = std::max(
+          element_size,
+          static_cast<int>(std::lround(
+              element_size * ALIEN_EXPLOSION_RENDER_SCALE * frame_scale *
+              (0.96 + 0.10 * bloom))));
+
+      if (frame_index >= 0 &&
+          frame_index < static_cast<int>(sdl_alien_explosion_textures.size())) {
+        SDL_Texture *frame_texture =
+            sdl_alien_explosion_textures[static_cast<size_t>(frame_index)];
+        if (frame_texture != nullptr) {
+          const int anchor_y =
+              center_y + static_cast<int>(std::lround(element_size * 0.18));
+          const SDL_Point frame_size =
+              frame_index < static_cast<int>(sdl_alien_explosion_sizes.size())
+                  ? sdl_alien_explosion_sizes[static_cast<size_t>(frame_index)]
+                  : SDL_Point{0, 0};
+          const SDL_Rect dest_rect = BottomAnchoredTextureRect(
+              center_x, anchor_y, render_size, frame_size);
+          SDL_SetTextureAlphaMod(frame_texture, 255);
+          SDL_RenderCopy(sdl_renderer, frame_texture, nullptr, &dest_rect);
+          SDL_SetTextureAlphaMod(frame_texture, 255);
+        }
+      }
+    } else if (effect.type == EffectType::AirstrikeExplosion) {
       const Uint32 total_duration = AIRSTRIKE_EXPLOSION_DURATION_MS;
       const int frame_index = std::clamp(
           static_cast<int>(elapsed / std::max<Uint32>(1, AIRSTRIKE_EXPLOSION_FRAME_MS)),

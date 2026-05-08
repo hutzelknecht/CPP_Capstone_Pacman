@@ -35,6 +35,7 @@
 
 class Map;
 class Game;
+struct AlienAgent;
 struct WallRubblePiece;
 struct NuclearCrater;
 
@@ -142,6 +143,7 @@ private:
   void drawActiveNuclearBombDrop();
   void drawpacman();
   void drawmonsters();
+  void drawaliens();
   void drawgoodies();
   void renderGoodieSparkle(class Goodie *goodie, const SDL_Rect &sprite_rect,
                            Uint32 now);
@@ -150,6 +152,7 @@ private:
   void drawactiveairstrike();
   void drawrockets();
   void drawbiohazardbeam();
+  void drawalienlaser();
   void drawStaticPacman();
   void drawStaticMonsters();
   void drawStaticGoodies();
@@ -199,6 +202,8 @@ private:
                      int star_radius_px, Uint32 now);
   void drawPulsingHeart(int center_x, int center_y, int size_px, Uint8 alpha,
                         double pulse);
+  void drawAlienThoughtBubble(const AlienAgent &alien,
+                              const SDL_Rect &alien_rect, Uint32 now);
   SDL_Texture *getStunnedGoatTexture();
   void drawWalkieTalkieIcon(const SDL_Rect &icon_rect, Uint8 alpha,
                             double animation_clock);
@@ -273,7 +278,8 @@ private:
                                          SDL_Point &texture_size);
   SDL_Texture *loadTrimmedChromaKeyTexture(const std::string &path,
                                            SDL_Point &trimmed_size,
-                                           Uint8 tolerance);
+                                           Uint8 tolerance,
+                                           bool trim_to_content = true);
   void renderDecorativeTexture(SDL_Texture *texture,
                                const SDL_Rect &destination,
                                const SDL_Color &glow_color,
@@ -293,6 +299,8 @@ private:
   int getMonsterAnimationFrame(char monster_char, int animation_seed,
                                bool grazing = false,
                                bool jumping = false) const;
+  SDL_Texture *getAlienTexture(const AlienAgent &alien, Uint32 now);
+  int getAlienAnimationFrame(const AlienAgent &alien, Uint32 now) const;
   SDL_Surface *createBrickTextSurface(TTF_Font *font, const std::string &text,
                                       const SDL_Color &outline_color);
   Uint32 readPixel(SDL_Surface *surface, int x, int y);
@@ -354,6 +362,10 @@ private:
   std::vector<SDL_Texture *> sdl_goat_grazing_textures;
   std::vector<SDL_Surface *> sdl_goat_jumping_surfaces;
   std::vector<SDL_Texture *> sdl_goat_jumping_textures;
+  std::vector<SDL_Texture *> sdl_alien_textures;
+  std::vector<SDL_Point> sdl_alien_sizes;
+  std::vector<SDL_Texture *> sdl_alien_explosion_textures;
+  std::vector<SDL_Point> sdl_alien_explosion_sizes;
   SDL_Rect sdl_monster_rect;
 
   std::vector<SDL_Surface *> sdl_pacman_surfaces;

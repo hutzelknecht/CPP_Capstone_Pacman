@@ -40,6 +40,8 @@ public:
   bool ConsumeNuclearTestRequest();
   bool ConsumeNuclearTestBRequest();
   bool ConsumeDiscoTestRequest();
+  bool ConsumeAlienSpawnRequest();
+  bool ConsumeAlienLaserRequest();
   bool ConsumePauseToggleRequest();
   bool ConsumeExitDialogRequest();
   bool ConsumeConfirmRequest();
@@ -54,6 +56,8 @@ private:
   bool nuclear_test_requested;
   bool nuclear_test_b_requested;
   bool disco_test_requested;
+  bool alien_spawn_requested;
+  bool alien_laser_requested;
   bool pause_toggle_requested;
   bool exit_dialog_requested;
   bool confirm_requested;

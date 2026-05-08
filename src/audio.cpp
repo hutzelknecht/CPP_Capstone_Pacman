@@ -228,6 +228,9 @@ Audio::Audio() {
   SFX_nuclear_bomb_alarm = nullptr;
   SFX_nuclear_bomb_drop = nullptr;
   SFX_nuclear_bomb_explosion = nullptr;
+  SFX_alien_laser = nullptr;
+  SFX_alien_scream = nullptr;
+  SFX_alien_explosion = nullptr;
   SFX_invulnerability_loop = nullptr;
   SFX_punch = nullptr;
   SFX_goat_bleat = nullptr;
@@ -297,6 +300,12 @@ Audio::Audio() {
       Paths::GetDataFilePath(NUCLEAR_BOMB_DROP_SOUND_PATH);
   const std::string nuclear_bomb_explosion_sound_path =
       Paths::GetDataFilePath(NUCLEAR_BOMB_EXPLOSION_SOUND_PATH);
+  const std::string alien_laser_sound_path =
+      Paths::GetDataFilePath(ALIEN_LASER_SOUND_PATH);
+  const std::string alien_scream_sound_path =
+      Paths::GetDataFilePath(ALIEN_SCREAM_SOUND_PATH);
+  const std::string alien_explosion_sound_path =
+      Paths::GetDataFilePath(ALIEN_EXPLOSION_SOUND_PATH);
   const std::string menu_music_path = Paths::GetDataFilePath("menu_music.mp3");
   const std::string disco_music_path =
       Paths::GetDataFilePath(DISCO_MUSIC_PATH);
@@ -409,6 +418,22 @@ Audio::Audio() {
     SFX_nuclear_bomb_explosion = CreateDynamiteExplosionChunk();
   }
   AmplifyChunk(SFX_nuclear_bomb_explosion, NUCLEAR_BOMB_EXPLOSION_GAIN);
+  SFX_alien_laser = Mix_LoadWAV(alien_laser_sound_path.c_str());
+  if (SFX_alien_laser == nullptr) {
+    SFX_alien_laser = CreateBiohazardBeamChunk();
+  }
+  AmplifyChunk(SFX_alien_laser, ALIEN_LASER_SOUND_GAIN);
+  SFX_alien_scream = Mix_LoadWAV(alien_scream_sound_path.c_str());
+  if (SFX_alien_scream == nullptr) {
+    SFX_alien_scream = CreateSynthChunk({784, 622, 466, 392}, 520, 0.48, 2.0,
+                                        170.0);
+  }
+  AmplifyChunk(SFX_alien_scream, ALIEN_SCREAM_SOUND_GAIN);
+  SFX_alien_explosion = Mix_LoadWAV(alien_explosion_sound_path.c_str());
+  if (SFX_alien_explosion == nullptr) {
+    SFX_alien_explosion = CreateDynamiteExplosionChunk();
+  }
+  AmplifyChunk(SFX_alien_explosion, ALIEN_EXPLOSION_SOUND_GAIN);
   SFX_invulnerability_loop = CreateInvulnerabilityLoopChunk();
   const std::string punch_sound_path = Paths::GetDataFilePath("punch.mp3");
   SFX_punch = Mix_LoadWAV(punch_sound_path.c_str());
@@ -472,6 +497,9 @@ Audio::Audio() {
       SFX_nuclear_bomb_alarm == nullptr ||
       SFX_nuclear_bomb_drop == nullptr ||
       SFX_nuclear_bomb_explosion == nullptr ||
+      SFX_alien_laser == nullptr ||
+      SFX_alien_scream == nullptr ||
+      SFX_alien_explosion == nullptr ||
       SFX_invulnerability_loop == nullptr ||
       SFX_punch == nullptr || SFX_goat_bleat == nullptr ||
       SFX_rubble_crash == nullptr) {
@@ -603,6 +631,15 @@ Audio::~Audio() {
   }
   if (SFX_nuclear_bomb_explosion != nullptr) {
     Mix_FreeChunk(SFX_nuclear_bomb_explosion);
+  }
+  if (SFX_alien_laser != nullptr) {
+    Mix_FreeChunk(SFX_alien_laser);
+  }
+  if (SFX_alien_scream != nullptr) {
+    Mix_FreeChunk(SFX_alien_scream);
+  }
+  if (SFX_alien_explosion != nullptr) {
+    Mix_FreeChunk(SFX_alien_explosion);
   }
   if (SFX_invulnerability_loop != nullptr) {
     Mix_FreeChunk(SFX_invulnerability_loop);
@@ -1837,6 +1874,12 @@ void Audio::PlayNuclearBombDrop() { PlayChunk(SFX_nuclear_bomb_drop); };
 void Audio::PlayNuclearBombExplosion() {
   PlayChunk(SFX_nuclear_bomb_explosion);
 };
+
+void Audio::PlayAlienLaser() { PlayChunk(SFX_alien_laser); };
+
+void Audio::PlayAlienScream() { PlayChunk(SFX_alien_scream); };
+
+void Audio::PlayAlienExplosion() { PlayChunk(SFX_alien_explosion); };
 
 Uint32 Audio::GetAirstrikeRadioDurationMs() const {
   if (!audio_ready || SFX_airstrike_radio == nullptr) {

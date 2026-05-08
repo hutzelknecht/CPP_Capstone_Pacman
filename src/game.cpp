@@ -32,6 +32,7 @@ constexpr Uint32 kWallImpactDurationMs = 180;
 constexpr Uint32 kBiohazardHitSequenceDurationMs = BIOHAZARD_HIT_SEQUENCE_MS;
 constexpr Uint32 kBiohazardImpactFlashDurationMs =
     BIOHAZARD_IMPACT_FLASH_DURATION_MS;
+constexpr Uint32 kAlienExplosionDurationMs = ALIEN_EXPLOSION_DURATION_MS;
 constexpr Uint32 kSlimeSplashDurationMs =
     SLIME_SPLASH_FRAME_MS * SLIME_SPLASH_FRAME_COUNT + SLIME_SPLASH_FADE_MS;
 constexpr Uint32 kPlasmaShockwaveDurationMs = PLASMA_SHOCKWAVE_DURATION_MS;
@@ -560,6 +561,7 @@ Game::Game(Map *_map, Events *_events, Audio *_audio, Difficulty _difficulty,
   plastic_explosive_is_armed = false;
   active_airstrike = {};
   active_biohazard_beam = {};
+  active_alien_laser = {};
   nuclear_bomb_target_marker = {};
   active_nuclear_bomb_drop = {};
   active_nuclear_explosion = {};
@@ -716,6 +718,8 @@ void Game::Update() {
     UpdateAirstrike(now);
     UpdatePlacedDynamites(now);
     UpdateRockets(now);
+    UpdateAlienLaser(now);
+    UpdateAlienExplosions(now);
     UpdateExplosionParticles(now);
     return;
   }
@@ -735,8 +739,12 @@ void Game::Update() {
   if (active_disco_easteregg.is_active) {
     return;
   }
+  TrySpawnAlien(now);
   TryUseBiohazardBeam(now);
   UpdateBiohazardBeam(now);
+  TryFireAlienLaser(now);
+  UpdateAlienLaser(now);
+  UpdateAlienExplosions(now);
   TryUseNuclearBomb(now);
   UpdateNuclearBombDrop(now);
   TryTriggerNuclearExplosion(now);
@@ -960,6 +968,20 @@ void Game::ShiftPausedTimers(Uint32 paused_duration_ms) {
 
   for (LoveSmokeProjectile &smoke : active_love_smokes) {
     ShiftActiveTicks(smoke.spawned_ticks, paused_duration_ms);
+  }
+
+  ShiftActiveTicks(active_alien_laser.started_ticks, paused_duration_ms);
+  ShiftActiveTicks(active_alien_laser.visible_until_ticks, paused_duration_ms);
+  for (AlienAgent &alien : aliens) {
+    ShiftActiveTicks(alien.spawned_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.animation_started_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.animation_until_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.next_animation_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.thought_started_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.thought_visible_until_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.next_thought_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.scream_trigger_ticks, paused_duration_ms);
+    ShiftActiveTicks(alien.explosion_trigger_ticks, paused_duration_ms);
   }
 
   ShiftActiveTicks(active_biohazard_beam.started_ticks, paused_duration_ms);
@@ -1401,6 +1423,10 @@ bool Game::IsCellFreeForDynamitePickup(MapCoord coord) const {
     return false;
   }
 
+  if (IsCellOccupiedByAlien(coord)) {
+    return false;
+  }
+
   if (invulnerability_potion.is_visible &&
       SameCoord(coord, invulnerability_potion.coord)) {
     return false;
@@ -1498,6 +1524,10 @@ bool Game::IsCellFreeForInvulnerabilityPotion(MapCoord coord) const {
     return false;
   }
 
+  if (IsCellOccupiedByAlien(coord)) {
+    return false;
+  }
+
   for (const auto *monster : monsters) {
     if (monster->is_alive && SameCoord(coord, monster->map_coord)) {
       return false;
@@ -1586,6 +1616,10 @@ bool Game::IsCellFreeForPlasticExplosivePickup(MapCoord coord) const {
   }
 
   if (SameCoord(coord, pacman->map_coord)) {
+    return false;
+  }
+
+  if (IsCellOccupiedByAlien(coord)) {
     return false;
   }
 
@@ -1685,6 +1719,10 @@ bool Game::IsCellFreeForWalkieTalkiePickup(MapCoord coord) const {
     return false;
   }
 
+  if (IsCellOccupiedByAlien(coord)) {
+    return false;
+  }
+
   if (invulnerability_potion.is_visible &&
       SameCoord(coord, invulnerability_potion.coord)) {
     return false;
@@ -1775,6 +1813,10 @@ bool Game::IsCellFreeForRocketPickup(MapCoord coord) const {
   }
 
   if (SameCoord(coord, pacman->map_coord)) {
+    return false;
+  }
+
+  if (IsCellOccupiedByAlien(coord)) {
     return false;
   }
 
@@ -1869,6 +1911,10 @@ bool Game::IsCellFreeForBiohazardPickup(MapCoord coord) const {
   }
 
   if (SameCoord(coord, pacman->map_coord)) {
+    return false;
+  }
+
+  if (IsCellOccupiedByAlien(coord)) {
     return false;
   }
 
@@ -1974,6 +2020,26 @@ bool Game::IsCellFreeForDiscoPickup(MapCoord coord) const {
   return IsCellFreeForBiohazardPickup(coord);
 }
 
+bool Game::IsCellOccupiedByAlien(MapCoord coord) const {
+  for (const AlienAgent &alien : aliens) {
+    const bool occupies_cell =
+        alien.is_alive ||
+        (!alien.explosion_spawned && alien.explosion_trigger_ticks != 0);
+    if (occupies_cell && SameCoord(coord, alien.coord)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool Game::IsCellFreeForAlienSpawn(MapCoord coord) const {
+  if (!IsCellFreeForBiohazardPickup(coord)) {
+    return false;
+  }
+
+  return !IsCellOccupiedByAlien(coord);
+}
+
 bool Game::CanPlacePlasticExplosiveAt(MapCoord coord) const {
   if (!IsInsideMapBounds(map, coord)) {
     return false;
@@ -1983,6 +2049,10 @@ bool Game::CanPlacePlasticExplosiveAt(MapCoord coord) const {
       map->map_entry(static_cast<size_t>(coord.u), static_cast<size_t>(coord.v));
   if (entry == ElementType::TYPE_TELEPORTER ||
       entry == ElementType::TYPE_CRATER) {
+    return false;
+  }
+
+  if (IsCellOccupiedByAlien(coord)) {
     return false;
   }
 
@@ -2933,7 +3003,8 @@ void Game::UpdateBiohazardBeam(Uint32 now) {
     break;
   }
 
-  Monster *closest_target = nullptr;
+  Monster *closest_monster_target = nullptr;
+  AlienAgent *closest_alien_target = nullptr;
   float closest_distance_squared = std::numeric_limits<float>::max();
   for (Monster *monster : monsters) {
     if (monster == nullptr || !monster->is_alive || monster->is_electrified ||
@@ -2956,11 +3027,39 @@ void Game::UpdateBiohazardBeam(Uint32 now) {
     }
 
     closest_distance_squared = distance_squared;
-    closest_target = monster;
+    closest_monster_target = monster;
+    closest_alien_target = nullptr;
   }
 
-  if (closest_target != nullptr) {
-    SDL_FPoint impact_point = PreciseWorldCenter(closest_target);
+  for (AlienAgent &alien : aliens) {
+    if (!alien.is_alive) {
+      continue;
+    }
+
+    const SDL_FPoint alien_center = AlienWorldCenter(alien);
+    if (!SegmentHitsCircle(beam_origin, beam_endpoint, alien_center,
+                           ALIEN_HITBOX_RADIUS_CELLS +
+                               BEAM_HITBOX_RADIUS_CELLS)) {
+      continue;
+    }
+
+    const float dx = alien_center.x - beam_origin.x;
+    const float dy = alien_center.y - beam_origin.y;
+    const float distance_squared = dx * dx + dy * dy;
+    if (distance_squared >= closest_distance_squared) {
+      continue;
+    }
+
+    closest_distance_squared = distance_squared;
+    closest_monster_target = nullptr;
+    closest_alien_target = &alien;
+  }
+
+  if (closest_monster_target != nullptr || closest_alien_target != nullptr) {
+    SDL_FPoint impact_point =
+        closest_monster_target != nullptr
+            ? PreciseWorldCenter(closest_monster_target)
+            : AlienWorldCenter(*closest_alien_target);
     const float impact_offset = 0.24f;
     switch (active_biohazard_beam.direction) {
     case Directions::Up:
@@ -2980,13 +3079,21 @@ void Game::UpdateBiohazardBeam(Uint32 now) {
       break;
     }
 
-    ElectrifyMonster(closest_target, now);
-    closest_target->biohazard_paralyzed_until_ticks = std::max(
-        closest_target->biohazard_paralyzed_until_ticks,
-        now + kBiohazardHitSequenceDurationMs);
-    closest_target->px_delta.x = 0;
-    closest_target->px_delta.y = 0;
-    GameEffect impact_flash{closest_target->map_coord, now,
+    const MapCoord impact_coord = closest_monster_target != nullptr
+                                      ? closest_monster_target->map_coord
+                                      : closest_alien_target->coord;
+    if (closest_monster_target != nullptr) {
+      ElectrifyMonster(closest_monster_target, now);
+      closest_monster_target->biohazard_paralyzed_until_ticks = std::max(
+          closest_monster_target->biohazard_paralyzed_until_ticks,
+          now + kBiohazardHitSequenceDurationMs);
+      closest_monster_target->px_delta.x = 0;
+      closest_monster_target->px_delta.y = 0;
+    } else {
+      EliminateAlien(closest_alien_target, now);
+    }
+
+    GameEffect impact_flash{impact_coord, now,
                             EffectType::BiohazardImpactFlash, 1};
     impact_flash.has_precise_world_center = true;
     impact_flash.precise_world_center = impact_point;
@@ -3000,6 +3107,218 @@ void Game::UpdateBiohazardBeam(Uint32 now) {
     active_biohazard_beam.locked_origin_delta = pacman->px_delta;
     active_biohazard_beam.locked_end_world_center = impact_point;
   }
+}
+
+void Game::TrySpawnAlien(Uint32 now) {
+  if (events == nullptr || map == nullptr || pacman == nullptr) {
+    return;
+  }
+
+  if (!events->ConsumeAlienSpawnRequest()) {
+    return;
+  }
+
+  std::vector<MapCoord> candidates;
+  const int rows = static_cast<int>(map->get_map_rows());
+  const int cols = static_cast<int>(map->get_map_cols());
+  candidates.reserve(static_cast<size_t>(rows * cols));
+  for (int row = 0; row < rows; ++row) {
+    for (int col = 0; col < cols; ++col) {
+      const MapCoord coord{row, col};
+      if (IsCellFreeForAlienSpawn(coord)) {
+        candidates.push_back(coord);
+      }
+    }
+  }
+
+  if (candidates.empty()) {
+    return;
+  }
+
+  std::uniform_int_distribution<size_t> distribution(0, candidates.size() - 1);
+  AlienAgent alien;
+  alien.coord = candidates[distribution(RandomGenerator())];
+  alien.spawned_ticks = now;
+  alien.animation_seed =
+      static_cast<int>((now % 997) + alien.coord.u * 61 + alien.coord.v * 43 +
+                       static_cast<int>(aliens.size()) * 29);
+  alien.next_animation_ticks =
+      now + RandomInterval(ALIEN_IDLE_ANIMATION_MIN_INTERVAL_MS,
+                           ALIEN_IDLE_ANIMATION_MAX_INTERVAL_MS);
+  alien.next_thought_ticks =
+      now + RandomInterval(ALIEN_THOUGHT_MIN_INTERVAL_MS / 2,
+                           ALIEN_THOUGHT_MAX_INTERVAL_MS / 2);
+  aliens.push_back(alien);
+}
+
+AlienAgent *Game::FindAlienInLineOfSight(Directions direction) {
+  if (map == nullptr || pacman == nullptr || direction == Directions::None) {
+    return nullptr;
+  }
+
+  AlienAgent *closest_target = nullptr;
+  int closest_distance = std::numeric_limits<int>::max();
+  for (AlienAgent &alien : aliens) {
+    if (!alien.is_alive) {
+      continue;
+    }
+
+    Directions sight_direction = Directions::None;
+    if (!HasClearAxisLineOfSight(map, pacman->map_coord, alien.coord,
+                                 sight_direction) ||
+        sight_direction != direction) {
+      continue;
+    }
+
+    const int distance = std::abs(alien.coord.u - pacman->map_coord.u) +
+                         std::abs(alien.coord.v - pacman->map_coord.v);
+    if (distance >= closest_distance) {
+      continue;
+    }
+
+    closest_distance = distance;
+    closest_target = &alien;
+  }
+
+  return closest_target;
+}
+
+void Game::TryFireAlienLaser(Uint32 now) {
+  if (events == nullptr || pacman == nullptr || active_alien_laser.is_active) {
+    return;
+  }
+
+  if (!events->ConsumeAlienLaserRequest()) {
+    return;
+  }
+
+  Directions facing_direction = events->get_next_move();
+  if (facing_direction != Directions::None) {
+    pacman->facing_direction = facing_direction;
+  } else {
+    facing_direction = pacman->facing_direction;
+  }
+  if (facing_direction == Directions::None) {
+    facing_direction = Directions::Down;
+  }
+
+  AlienAgent *target = FindAlienInLineOfSight(facing_direction);
+  if (target == nullptr) {
+    return;
+  }
+
+  SDL_FPoint impact_point = MakeCellCenter(target->coord);
+  const float impact_offset = ALIEN_LASER_IMPACT_OFFSET_CELLS;
+  switch (facing_direction) {
+  case Directions::Up:
+    impact_point.y += impact_offset;
+    break;
+  case Directions::Down:
+    impact_point.y -= impact_offset;
+    break;
+  case Directions::Left:
+    impact_point.x += impact_offset;
+    break;
+  case Directions::Right:
+    impact_point.x -= impact_offset;
+    break;
+  case Directions::None:
+  default:
+    break;
+  }
+
+  active_alien_laser = {};
+  active_alien_laser.is_active = true;
+  active_alien_laser.direction = facing_direction;
+  active_alien_laser.started_ticks = now;
+  active_alien_laser.visible_until_ticks = now + ALIEN_LASER_VISIBLE_MS;
+  active_alien_laser.animation_seed =
+      static_cast<int>((now % 997) + pacman->map_coord.u * 97 +
+                       pacman->map_coord.v * 67 + target->animation_seed);
+  active_alien_laser.origin_coord = pacman->map_coord;
+  active_alien_laser.origin_delta = pacman->px_delta;
+  active_alien_laser.end_world_center = impact_point;
+
+  EliminateAlien(target, now);
+
+#ifdef AUDIO
+  if (audio != nullptr) {
+    audio->PlayAlienLaser();
+  }
+#endif
+}
+
+void Game::UpdateAlienLaser(Uint32 now) {
+  if (active_alien_laser.is_active &&
+      now >= active_alien_laser.visible_until_ticks) {
+    active_alien_laser = {};
+  }
+}
+
+void Game::UpdateAlienExplosions(Uint32 now) {
+  for (AlienAgent &alien : aliens) {
+    if (alien.is_alive) {
+      if (alien.next_animation_ticks != 0 &&
+          now >= alien.next_animation_ticks) {
+        alien.animation_started_ticks = now;
+        alien.animation_until_ticks = now + ALIEN_IDLE_ANIMATION_BURST_MS;
+        alien.next_animation_ticks =
+            now + ALIEN_IDLE_ANIMATION_BURST_MS +
+            RandomInterval(ALIEN_IDLE_ANIMATION_MIN_INTERVAL_MS,
+                           ALIEN_IDLE_ANIMATION_MAX_INTERVAL_MS);
+      }
+
+      if (alien.thought_visible_until_ticks != 0 &&
+          now >= alien.thought_visible_until_ticks + ALIEN_THOUGHT_FADE_MS) {
+        alien.thought_started_ticks = 0;
+        alien.thought_visible_until_ticks = 0;
+        alien.thought_index = -1;
+      }
+
+      if (alien.next_thought_ticks != 0 && now >= alien.next_thought_ticks &&
+          alien.thought_visible_until_ticks == 0) {
+        std::uniform_int_distribution<int> thought_dist(0, 14);
+        alien.thought_index = thought_dist(RandomGenerator());
+        alien.thought_started_ticks = now;
+        alien.thought_visible_until_ticks = now + ALIEN_THOUGHT_VISIBLE_MS;
+        alien.next_thought_ticks =
+            now + ALIEN_THOUGHT_VISIBLE_MS + ALIEN_THOUGHT_FADE_MS +
+            RandomInterval(ALIEN_THOUGHT_MIN_INTERVAL_MS,
+                           ALIEN_THOUGHT_MAX_INTERVAL_MS);
+      }
+    }
+
+    if (!alien.is_alive && !alien.scream_played &&
+        alien.scream_trigger_ticks != 0 && now >= alien.scream_trigger_ticks) {
+      alien.scream_played = true;
+#ifdef AUDIO
+      if (audio != nullptr) {
+        audio->PlayAlienScream();
+      }
+#endif
+    }
+
+    if (alien.is_alive || alien.explosion_spawned ||
+        alien.explosion_trigger_ticks == 0 ||
+        now < alien.explosion_trigger_ticks) {
+      continue;
+    }
+
+    const SDL_FPoint explosion_center = MakeCellCenter(alien.coord);
+    GameEffect explosion_effect{alien.coord, now, EffectType::AlienExplosion,
+                                1};
+    explosion_effect.has_precise_world_center = true;
+    explosion_effect.precise_world_center = explosion_center;
+    effects.push_back(explosion_effect);
+    SpawnExplosionSmokeCloud(explosion_center, 0.85f, now, 0.35f);
+    alien.explosion_spawned = true;
+#ifdef AUDIO
+    if (audio != nullptr) {
+      audio->PlayAlienExplosion();
+    }
+#endif
+  }
+
 }
 
 void Game::TryPlaceDynamite(Uint32 now) {
@@ -3554,6 +3873,14 @@ void Game::CreateNuclearCrater(const ActiveNuclearExplosion &explosion,
                              now + kNuclearCraterExplosionDelayMs);
       }
 
+      for (AlienAgent &alien : aliens) {
+        if (!alien.is_alive || !SameCoord(alien.coord, coord)) {
+          continue;
+        }
+
+        EliminateAlien(&alien, now + kNuclearCraterExplosionDelayMs);
+      }
+
       if (dynamite_pickup.is_visible && SameCoord(dynamite_pickup.coord, coord)) {
         dynamite_pickup.is_visible = false;
         dynamite_pickup.is_fading = false;
@@ -4062,6 +4389,25 @@ void Game::UpdateRockets(Uint32 now) {
           break;
         }
       }
+      if (detonate_rocket) {
+        break;
+      }
+
+      for (AlienAgent &alien : aliens) {
+        if (!alien.is_alive) {
+          continue;
+        }
+
+        const SDL_FPoint alien_center = AlienWorldCenter(alien);
+        if (SegmentHitsCircle(rocket_segment_start, rocket_segment_end,
+                              alien_center,
+                              ALIEN_HITBOX_RADIUS_CELLS +
+                                  ROCKET_HITBOX_RADIUS_CELLS)) {
+          impact_coord = rocket.current_coord;
+          detonate_rocket = true;
+          break;
+        }
+      }
     }
 
     if (detonate_rocket) {
@@ -4218,6 +4564,21 @@ void Game::DetonateDynamite(const PlacedDynamite &dynamite, Uint32 now) {
     ScheduleMonsterBlast(monster, trigger_ticks);
   }
 
+  for (AlienAgent &alien : aliens) {
+    if (!alien.is_alive ||
+        !IsWithinDynamiteRadius(dynamite.coord, alien.coord)) {
+      continue;
+    }
+
+    const int distance_steps =
+        std::max(std::abs(alien.coord.u - dynamite.coord.u),
+                 std::abs(alien.coord.v - dynamite.coord.v));
+    const Uint32 trigger_ticks =
+        now + kDynamiteChainDelayMs +
+        static_cast<Uint32>(std::max(0, distance_steps) * 80);
+    EliminateAlien(&alien, trigger_ticks);
+  }
+
   if (!IsPacmanInvulnerable(now) &&
       IsWithinDynamiteRadius(dynamite.coord, pacman->map_coord)) {
     TriggerLoss(pacman->map_coord, now);
@@ -4248,6 +4609,7 @@ void Game::DetonatePlasticExplosive(const PlacedPlasticExplosive &explosive,
   }
 
   bool eliminated_monster = false;
+  bool eliminated_alien = false;
   for (auto *monster : monsters) {
     if (!monster->is_alive) {
       continue;
@@ -4265,7 +4627,21 @@ void Game::DetonatePlasticExplosive(const PlacedPlasticExplosive &explosive,
     eliminated_monster = true;
   }
 
-  if (!targets_breakable_wall && !eliminated_monster) {
+  for (AlienAgent &alien : aliens) {
+    if (!alien.is_alive) {
+      continue;
+    }
+
+    if (PointDistance(explosive_center, AlienWorldCenter(alien)) >
+        kPlasticExplosiveMonsterHitRadiusCells) {
+      continue;
+    }
+
+    EliminateAlien(&alien, now);
+    eliminated_alien = true;
+  }
+
+  if (!targets_breakable_wall && !eliminated_monster && !eliminated_alien) {
 #ifdef AUDIO
     audio->PlayMonsterExplosion();
 #endif
@@ -4295,6 +4671,16 @@ void Game::DetonateAirstrikeBomb(const AirstrikeBomb &bomb, Uint32 now) {
     }
 
     EliminateMonster(monster, now);
+  }
+
+  for (AlienAgent &alien : aliens) {
+    if (!alien.is_alive ||
+        !IsWithinRadius(bomb.coord, alien.coord,
+                        AIRSTRIKE_EXPLOSION_RADIUS_CELLS)) {
+      continue;
+    }
+
+    EliminateAlien(&alien, now);
   }
 
   if (!IsPacmanInvulnerable(now) &&
@@ -4353,6 +4739,21 @@ void Game::DetonateRocket(const RocketProjectile &rocket, MapCoord impact_coord,
         now + kDynamiteChainDelayMs +
         static_cast<Uint32>(std::max(0, distance_steps) * 80);
     ScheduleMonsterBlast(monster, trigger_ticks);
+  }
+
+  for (AlienAgent &alien : aliens) {
+    if (!alien.is_alive ||
+        !IsWithinDynamiteRadius(impact_coord, alien.coord)) {
+      continue;
+    }
+
+    const int distance_steps =
+        std::max(std::abs(alien.coord.u - impact_coord.u),
+                 std::abs(alien.coord.v - impact_coord.v));
+    const Uint32 trigger_ticks =
+        now + kDynamiteChainDelayMs +
+        static_cast<Uint32>(std::max(0, distance_steps) * 80);
+    EliminateAlien(&alien, trigger_ticks);
   }
 
   if (!IsPacmanInvulnerable(now) &&
@@ -4504,6 +4905,10 @@ SDL_FPoint Game::PreciseWorldCenter(const MapElement *element) const {
   return center;
 }
 
+SDL_FPoint Game::AlienWorldCenter(const AlienAgent &alien) const {
+  return MakeCellCenter(alien.coord);
+}
+
 namespace {
 SDL_FPoint DirectionVector(Directions direction) {
   switch (direction) {
@@ -4643,6 +5048,24 @@ void Game::UpdateFireballs(Uint32 now) {
                               MONSTER_HITBOX_RADIUS_CELLS +
                                   FIREBALL_HITBOX_RADIUS_CELLS)) {
           EliminateMonster(monster, now);
+          remove_fireball = true;
+          break;
+        }
+      }
+      if (remove_fireball) {
+        break;
+      }
+
+      for (AlienAgent &alien : aliens) {
+        if (!alien.is_alive) {
+          continue;
+        }
+
+        const SDL_FPoint alien_center = AlienWorldCenter(alien);
+        if (SegmentHitsCircle(segment_start, segment_end, alien_center,
+                              ALIEN_HITBOX_RADIUS_CELLS +
+                                  FIREBALL_HITBOX_RADIUS_CELLS)) {
+          EliminateAlien(&alien, now);
           remove_fireball = true;
           break;
         }
@@ -4829,10 +5252,30 @@ void Game::CleanupEffects(Uint32 now) {
                        } else if (effect.type ==
                                   EffectType::NuclearExplosionB) {
                          max_age = kNuclearExplosionBDurationMs;
+                       } else if (effect.type == EffectType::AlienExplosion) {
+                         max_age = kAlienExplosionDurationMs;
                        }
                        return now - effect.started_ticks > max_age;
                      }),
       effects.end());
+}
+
+void Game::EliminateAlien(AlienAgent *alien, Uint32 sequence_start_ticks) {
+  if (alien == nullptr || !alien->is_alive) {
+    return;
+  }
+
+  alien->is_alive = false;
+  alien->thought_started_ticks = 0;
+  alien->thought_visible_until_ticks = 0;
+  alien->next_thought_ticks = 0;
+  alien->animation_until_ticks = 0;
+  alien->next_animation_ticks = 0;
+  alien->scream_trigger_ticks = sequence_start_ticks + ALIEN_SCREAM_DELAY_MS;
+  alien->explosion_trigger_ticks =
+      alien->scream_trigger_ticks + ALIEN_SCREAM_TO_EXPLOSION_DELAY_MS;
+  alien->scream_played = false;
+  alien->explosion_spawned = false;
 }
 
 void Game::EliminateMonsterWithDynamiteBlast(Monster *monster, Uint32 now) {

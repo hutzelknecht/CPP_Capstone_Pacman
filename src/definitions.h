@@ -107,6 +107,24 @@ inline constexpr const char *NUCLEAR_BOMB_ASSET_PATH = "nuclear_bomb.png";
 inline constexpr const char *NUCLEAR_TARGET_MARKER_ASSET_PATH =
     "nuclear_target_marker.png";
 inline constexpr const char *NUCLEAR_CRATER_ASSET_PATH = "nuclear_crater.png";
+inline constexpr int ALIEN_FRAME_ASSET_COUNT = 4;
+inline constexpr std::array<const char *, ALIEN_FRAME_ASSET_COUNT>
+    ALIEN_FRAME_ASSET_PATHS{
+        "alien_frames/alien_stand_f1.png",
+        "alien_frames/alien_stand_f2.png",
+        "alien_frames/alien_stand_f3.png",
+        "alien_frames/alien_stand_f4.png",
+    };
+inline constexpr int ALIEN_EXPLOSION_FRAME_ASSET_COUNT = 6;
+inline constexpr std::array<const char *, ALIEN_EXPLOSION_FRAME_ASSET_COUNT>
+    ALIEN_EXPLOSION_FRAME_ASSET_PATHS{
+        "alien_explosion_frames/alien_explosion_f1.png",
+        "alien_explosion_frames/alien_explosion_f2.png",
+        "alien_explosion_frames/alien_explosion_f3.png",
+        "alien_explosion_frames/alien_explosion_f4.png",
+        "alien_explosion_frames/alien_explosion_f5.png",
+        "alien_explosion_frames/alien_explosion_f6.png",
+    };
 inline constexpr const char *MENU_MUSIC_PATH = "menu_music.mp3";
 inline constexpr const char *DISCO_MUSIC_PATH = "disco_easteregg.mp3";
 inline constexpr const char *WIN_MUSIC_PATH = "win_melody.mp3";
@@ -144,6 +162,10 @@ inline constexpr const char *NUCLEAR_BOMB_DROP_SOUND_PATH =
     "nuclear_bomb_drop.mp3";
 inline constexpr const char *NUCLEAR_BOMB_EXPLOSION_SOUND_PATH =
     "nuclear_bomb_explosion.mp3";
+inline constexpr const char *ALIEN_LASER_SOUND_PATH = "alien_laser.mp3";
+inline constexpr const char *ALIEN_SCREAM_SOUND_PATH = "alien_scream.mp3";
+inline constexpr const char *ALIEN_EXPLOSION_SOUND_PATH =
+    "alien_explosion.mp3";
 inline constexpr const char *SETTINGS_FILE_NAME = "settings.cfg";
 
 /**
@@ -258,7 +280,7 @@ inline constexpr SDL_Color START_MENU_LOGO_RIM_HIGHLIGHT_COLOR{220, 240, 255,
                                                                255};
 inline constexpr SDL_Color START_MENU_LOGO_RIM_REFRACTION_COLOR{90, 168, 240,
                                                                 255};
-inline constexpr SDL_Color START_MENU_LOGO_RIM_SHADOW_COLOR{2, 6, 26, 255};
+inline constexpr SDL_Color START_MENU_LOGO_RIM_SHADOW_COLOR{200, 6, 26, 255};
 
 // 3D-Extrusion: Anzahl der gestapelten Tiefenschichten. Höher = glattere
 // Seitenwände, mehr Render-Aufwand. 6 wirkt low-poly, 30 ultraglatt.
@@ -286,28 +308,45 @@ inline constexpr SDL_Color START_MENU_LOGO_BACK_TINT{16, 28, 70, 255};
 
 // Liquid-Warp Amplituden als Anteil von Logo-Breite/-Höhe. Größer = breitere
 // Wellen; sichtbar verzerrtes Glas.
-inline constexpr float START_MENU_LOGO_WARP_AMP_X_FACTOR = 0.0175f;
-inline constexpr float START_MENU_LOGO_WARP_AMP_Y_FACTOR = 0.038f;
+inline constexpr float START_MENU_LOGO_WARP_AMP_X_FACTOR = 0.0075f;
+inline constexpr float START_MENU_LOGO_WARP_AMP_Y_FACTOR = 0.018f;
 
 // Geschwindigkeitsfaktor der Liquid-Welle. 1.0f = zähflüssiger Standard,
 // <1.0f = noch dickflüssiger, >1.0f = quirligere/lockere Bewegung.
-inline constexpr double START_MENU_LOGO_WARP_SPEED = 1.0;
+inline constexpr double START_MENU_LOGO_WARP_SPEED = 0.70;
 
 // Drop-Shadow unter dem Glas. Offset = Schrifthöhe * SHADOW_OFFSET_FACTOR
 // (mindestens 5 px); Alpha = Sichtbarkeit; Farbe = Schattenton.
 inline constexpr float START_MENU_LOGO_SHADOW_OFFSET_FACTOR = 0.05f;
-inline constexpr Uint8 START_MENU_LOGO_SHADOW_ALPHA = 168;
-inline constexpr SDL_Color START_MENU_LOGO_SHADOW_COLOR{6, 18, 86, 255};
+inline constexpr Uint8 START_MENU_LOGO_SHADOW_ALPHA = 108;
+inline constexpr SDL_Color START_MENU_LOGO_SHADOW_COLOR{6, 18, 255, 255};
 
 // Aufblitzende Glanzlicht-Sterne ("Sparkles") auf der Glasoberfläche.
-// SPARKLE_TINT_STRENGTH blendet die drei Sparkle-Schichten (weicher Halo,
-// hellblaue Spitze, weißer Kern) linear in Richtung SPARKLE_TINT_COLOR.
-// 0.0f = neutral cyan/weiß (klassischer Funkel), 1.0f = vollständig auf den
-// Logo-Farbton gefärbt (Sparkle wirkt wie Teil des Glases). SPARKLE_TINT_COLOR
-// gibt diesen Farbton vor und sollte am ehesten zu den Glas-Reflexen passen.
-inline constexpr SDL_Color START_MENU_LOGO_SPARKLE_TINT_COLOR{140, 188, 240,
+//
+// Jeder Sparkle besteht aus drei übereinander gezeichneten Vier-Punkt-Sternen
+// (weicher Halo -> mittlere Spitze -> heller Kern). Die folgenden Konstanten
+// bestimmen Form, Helligkeit und Farbton dieser drei Schichten:
+//
+//   SPARKLE_TINT_COLOR     - Ziel-Farbton (RGB; das Alpha-Feld ist hier ohne
+//                            Wirkung, Transparenz wird über ALPHA_FACTOR
+//                            gesteuert).
+//   SPARKLE_TINT_STRENGTH  - 0.0f = neutrale cyan/weiße Funken,
+//                            1.0f = vollständig auf SPARKLE_TINT_COLOR
+//                            gefärbt (Sparkle wirkt wie Teil des Glases).
+//   SPARKLE_ALPHA_FACTOR   - skaliert die Deckkraft aller drei Schichten.
+//                            <1.0f = transparenter / dezenter,
+//                            >1.0f = greller. 0.0f schaltet die Funken aus.
+//   SPARKLE_THICKNESS_FACTOR - Multiplikator für die Strichstärke der Sterne.
+//                              <1.0f = dünnere, feinere Strahlen,
+//                              >1.0f = klobigere Strahlen.
+//   SPARKLE_ARM_LENGTH_FACTOR - skaliert die Länge der Sternarme.
+//                               <1.0f = kompakter, >1.0f = ausladender.
+inline constexpr SDL_Color START_MENU_LOGO_SPARKLE_TINT_COLOR{115, 175, 235,
                                                               255};
-inline constexpr float START_MENU_LOGO_SPARKLE_TINT_STRENGTH = 0.6f;
+inline constexpr float START_MENU_LOGO_SPARKLE_TINT_STRENGTH = 0.85f;
+inline constexpr float START_MENU_LOGO_SPARKLE_ALPHA_FACTOR = 0.55f;
+inline constexpr float START_MENU_LOGO_SPARKLE_THICKNESS_FACTOR = 0.50f;
+inline constexpr float START_MENU_LOGO_SPARKLE_ARM_LENGTH_FACTOR = 1.00f;
 
 /**
  * @brief Player life configuration.
@@ -342,6 +381,7 @@ inline constexpr int SPEED_GOAT = 3;
  */
 inline constexpr float PACMAN_HITBOX_RADIUS_CELLS = 0.40f;
 inline constexpr float MONSTER_HITBOX_RADIUS_CELLS = 0.40f;
+inline constexpr float ALIEN_HITBOX_RADIUS_CELLS = 0.36f;
 inline constexpr float FIREBALL_HITBOX_RADIUS_CELLS = 0.22f;
 inline constexpr float SLIMEBALL_HITBOX_RADIUS_CELLS = 0.24f;
 inline constexpr float ROCKET_HITBOX_RADIUS_CELLS = 0.28f;
@@ -658,6 +698,27 @@ inline constexpr Uint32 BIOHAZARD_IMPACT_FLASH_DURATION_MS =
     BIOHAZARD_HIT_SEQUENCE_MS;
 inline constexpr int BIOHAZARD_CHARGE_STEP_DELAY_MS = 1;
 inline constexpr double BIOHAZARD_SIDE_BEAM_RAISE_FACTOR = 0.18;
+inline constexpr Uint32 ALIEN_LASER_VISIBLE_MS = 620;
+inline constexpr float ALIEN_LASER_IMPACT_OFFSET_CELLS = 0.50f;
+inline constexpr Uint32 ALIEN_SCREAM_DELAY_MS = 0;
+inline constexpr Uint32 ALIEN_SCREAM_TO_EXPLOSION_DELAY_MS = 0;
+inline constexpr Uint32 ALIEN_LASER_SINK_START_DELAY_MS = 90;
+inline constexpr Uint32 ALIEN_EXPLOSION_FRAME_MS = 85;
+inline constexpr Uint32 ALIEN_EXPLOSION_DURATION_MS =
+    ALIEN_EXPLOSION_FRAME_MS * ALIEN_EXPLOSION_FRAME_ASSET_COUNT;
+inline constexpr double ALIEN_LASER_SIDE_BEAM_RAISE_FACTOR = 0.18;
+inline constexpr Uint32 ALIEN_IDLE_ANIMATION_FRAME_MS = 220;
+inline constexpr Uint32 ALIEN_IDLE_ANIMATION_BURST_MS =
+    ALIEN_IDLE_ANIMATION_FRAME_MS * ALIEN_FRAME_ASSET_COUNT;
+inline constexpr Uint32 ALIEN_IDLE_ANIMATION_MIN_INTERVAL_MS = 6000;
+inline constexpr Uint32 ALIEN_IDLE_ANIMATION_MAX_INTERVAL_MS = 14000;
+inline constexpr Uint32 ALIEN_THOUGHT_MIN_INTERVAL_MS = 7000;
+inline constexpr Uint32 ALIEN_THOUGHT_MAX_INTERVAL_MS = 17000;
+inline constexpr Uint32 ALIEN_THOUGHT_VISIBLE_MS = 4200;
+inline constexpr Uint32 ALIEN_THOUGHT_FADE_MS = 700;
+inline constexpr double ALIEN_LASER_SOUND_GAIN = 1.7;
+inline constexpr double ALIEN_SCREAM_SOUND_GAIN = 1.35;
+inline constexpr double ALIEN_EXPLOSION_SOUND_GAIN = 2.3;
 inline constexpr double ELECTRIFIED_MONSTER_ROAR_GAIN = 2.2;
 inline constexpr Uint32 ELECTRIFIED_ATTACK_FLICKER_FRAME_MS = 22;
 inline constexpr int ELECTRIFIED_ATTACK_BOLT_MIN_COUNT = 18;
@@ -1321,6 +1382,7 @@ inline constexpr SDL_Color TELEPORTER_YELLOW_COLOR{244, 214, 88, 255};
  */
 inline constexpr int PACMAN_FRAMES_PER_DIRECTION = 4;
 inline constexpr int MONSTER_FRAMES_PER_DIRECTION = 4;
+inline constexpr int ALIEN_ANIMATION_FRAME_COUNT = ALIEN_FRAME_ASSET_COUNT;
 inline constexpr int ROCKET_FLIGHT_FRAME_COUNT = 2;
 inline constexpr int FART_CLOUD_FRAME_COUNT = 4;
 inline constexpr int SLIME_SPLASH_GRID_COLUMNS = 3;
@@ -1333,6 +1395,10 @@ inline constexpr Uint8 SLIME_BALL_BASE_ALPHA = 176;
 inline constexpr Uint8 SLIME_OVERLAY_BASE_ALPHA = 140;
 inline constexpr Uint8 SLIME_SPLASH_BASE_ALPHA = 176;
 inline constexpr double MONSTER_RENDER_SCALE = 1.19;
+inline constexpr double ALIEN_RENDER_SCALE = 0.92;
+inline constexpr double ALIEN_EXPLOSION_RENDER_SCALE = 2.25;
+inline constexpr double ALIEN_EXPLOSION_FINAL_FRAME_SCALE = 0.78;
+inline constexpr Uint8 ALIEN_CHROMA_KEY_TOLERANCE = 42;
 inline constexpr double MONSTER_EXPLOSION_RENDER_SCALE = 1.10;
 inline constexpr double MONSTER_EXPLOSION_INITIAL_OPACITY = 0.50;
 inline constexpr double MONSTER_EXPLOSION_FINAL_OPACITY = 0.10;

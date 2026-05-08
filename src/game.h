@@ -282,6 +282,35 @@ struct ActiveBiohazardBeam {
   SDL_FPoint locked_end_world_center{0.0f, 0.0f};
 };
 
+struct AlienAgent {
+  MapCoord coord{0, 0};
+  Uint32 spawned_ticks = 0;
+  Uint32 animation_started_ticks = 0;
+  Uint32 animation_until_ticks = 0;
+  Uint32 next_animation_ticks = 0;
+  Uint32 thought_started_ticks = 0;
+  Uint32 thought_visible_until_ticks = 0;
+  Uint32 next_thought_ticks = 0;
+  Uint32 scream_trigger_ticks = 0;
+  Uint32 explosion_trigger_ticks = 0;
+  int animation_seed = 0;
+  int thought_index = -1;
+  bool is_alive = true;
+  bool scream_played = false;
+  bool explosion_spawned = false;
+};
+
+struct ActiveAlienLaser {
+  bool is_active = false;
+  Directions direction = Directions::Right;
+  Uint32 started_ticks = 0;
+  Uint32 visible_until_ticks = 0;
+  int animation_seed = 0;
+  MapCoord origin_coord{0, 0};
+  PixelCoord origin_delta{0, 0};
+  SDL_FPoint end_world_center{0.0f, 0.0f};
+};
+
 struct ActiveNuclearExplosion {
   bool is_active = false;
   bool crater_created = false;
@@ -379,7 +408,8 @@ enum class EffectType {
   SlimeSplash,
   PlasmaShockwave,
   NuclearExplosion,
-  NuclearExplosionB
+  NuclearExplosionB,
+  AlienExplosion
 };
 
 struct GameEffect {
@@ -449,6 +479,8 @@ private:
   std::vector<RocketProjectile> active_rockets;
   std::vector<LoveSmokeProjectile> active_love_smokes;
   ActiveBiohazardBeam active_biohazard_beam;
+  ActiveAlienLaser active_alien_laser;
+  std::vector<AlienAgent> aliens;
   ActiveNuclearExplosion active_nuclear_explosion;
   ActiveNuclearExplosionB active_nuclear_explosion_b;
   std::vector<NuclearCrater> nuclear_craters;
@@ -519,6 +551,8 @@ private:
   void TryUseAirstrike(Uint32 now);
   void TryFireRocket(Uint32 now);
   void TryUseBiohazardBeam(Uint32 now);
+  void TrySpawnAlien(Uint32 now);
+  void TryFireAlienLaser(Uint32 now);
   void TryUseNuclearBomb(Uint32 now);
   void TryUseLovePotion(Uint32 now);
   void UpdateLoveSmokeProjectiles(Uint32 now);
@@ -531,6 +565,8 @@ private:
   void TryTriggerNuclearExplosion(Uint32 now);
   void TryTriggerNuclearExplosionB(Uint32 now);
   void UpdateBiohazardBeam(Uint32 now);
+  void UpdateAlienLaser(Uint32 now);
+  void UpdateAlienExplosions(Uint32 now);
   void UpdateNuclearExplosion(Uint32 now);
   void UpdateNuclearExplosionB(Uint32 now);
   void UpdateNuclearCraterClouds(Uint32 now);
@@ -556,6 +592,8 @@ private:
   bool IsCellFreeForLovePotionPickup(MapCoord coord) const;
   bool IsCellFreeForLifePickup(MapCoord coord) const;
   bool IsCellFreeForDiscoPickup(MapCoord coord) const;
+  bool IsCellFreeForAlienSpawn(MapCoord coord) const;
+  bool IsCellOccupiedByAlien(MapCoord coord) const;
   bool CanPlacePlasticExplosiveAt(MapCoord coord) const;
   bool IsCraterCell(MapCoord coord) const;
   bool IsWithinRadius(MapCoord center, MapCoord target, int radius_cells) const;
@@ -564,6 +602,7 @@ private:
   bool IsPacmanInvulnerable(Uint32 now) const;
   bool IsPacmanRecoveringFromLifeLoss(Uint32 now) const;
   Monster *FindMonsterById(int monster_id) const;
+  AlienAgent *FindAlienInLineOfSight(Directions direction);
   void ElectrifyMonster(Monster *monster, Uint32 now);
   void UpdateFireballs(Uint32 now);
   void UpdateSlimeballs(Uint32 now);
@@ -571,6 +610,7 @@ private:
   void ActivateSlimeCover(Uint32 now);
   void CleanupEffects(Uint32 now);
   void ShiftPausedTimers(Uint32 paused_duration_ms);
+  void EliminateAlien(AlienAgent *alien, Uint32 sequence_start_ticks);
   void EliminateMonsterWithDynamiteBlast(Monster *monster, Uint32 now);
   void EliminateMonster(Monster *monster, Uint32 now);
   void EliminateMonsterWithDustCloud(Monster *monster, Uint32 now);
@@ -603,6 +643,7 @@ private:
   void SpawnNuclearBCapSmoke(float cap_progress, Uint32 now);
   void UpdateExplosionParticles(Uint32 now);
   SDL_FPoint PreciseWorldCenter(const MapElement *element) const;
+  SDL_FPoint AlienWorldCenter(const AlienAgent &alien) const;
   SDL_FPoint FireballWorldCenter(const Fireball &fireball, Uint32 now) const;
   SDL_FPoint SlimeballWorldCenter(const Slimeball &slimeball, Uint32 now) const;
   SDL_FPoint RocketWorldCenter(const RocketProjectile &rocket,

@@ -61,6 +61,8 @@ Events::Events() {
   nuclear_test_requested = false;
   nuclear_test_b_requested = false;
   disco_test_requested = false;
+  alien_spawn_requested = false;
+  alien_laser_requested = false;
   pause_toggle_requested = false;
   exit_dialog_requested = false;
   confirm_requested = false;
@@ -90,6 +92,8 @@ void Events::SetGameplayFrozen(bool frozen) {
     nuclear_test_requested = false;
     nuclear_test_b_requested = false;
     disco_test_requested = false;
+    alien_spawn_requested = false;
+    alien_laser_requested = false;
     cheat_pending.fill(false);
   }
 }
@@ -132,6 +136,18 @@ bool Events::ConsumeNuclearTestBRequest() {
 bool Events::ConsumeDiscoTestRequest() {
   const bool requested = disco_test_requested;
   disco_test_requested = false;
+  return requested;
+}
+
+bool Events::ConsumeAlienSpawnRequest() {
+  const bool requested = alien_spawn_requested;
+  alien_spawn_requested = false;
+  return requested;
+}
+
+bool Events::ConsumeAlienLaserRequest() {
+  const bool requested = alien_laser_requested;
+  alien_laser_requested = false;
   return requested;
 }
 
@@ -235,6 +251,18 @@ void Events::update() {
       if (keycode == SDLK_d) {
         if (!is_repeat) {
           disco_test_requested = true;
+        }
+        continue;
+      }
+      if (keycode == SDLK_m) {
+        if (!is_repeat) {
+          alien_spawn_requested = true;
+        }
+        continue;
+      }
+      if (keycode == SDLK_l) {
+        if (!is_repeat) {
+          alien_laser_requested = true;
         }
         continue;
       }

@@ -1,37 +1,34 @@
-# Dockerfile for building BobMan Python on Windows (cross-compile from Linux)
-# Uses mingw-w64 to produce Windows .exe
-# Phase 2: Resource Loading
+# Dockerfile for running BobMan Python on Windows (experimental)
+# Note: This uses Linux with Wine or cross-compilation.
+# For best results, build natively on Windows.
+# Output: /app/BobMan.exe (wrapper script with .exe extension)
 
-FROM ubuntu:22.04 as builder
+FROM python:3.11-slim
 
-# Install mingw-w64 and SDL2 for Windows cross-compilation
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu \
+    PYTHONPATH=/app
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # mingw-w64 toolchain
-    mingw-w64 \
-    gcc-mingw-w64 \
-    g++-mingw-w64 \
-    # SDL2 Windows cross-compile libraries
-    libsdl2-dev \
-    libsdl2-image-dev \
-    libsdl2-ttf-dev \
-    libsdl2-mixer-dev \
-    # Python
-    python3 \
-    python3-dev \
-    python3-pip \
-    python3-venv \
-    # Build tools
-    make \
+    # SDL2 and related libraries
+    libsdl2-2.0-0 \
+    libsdl2-image-2.0-0 \
+    libsdl2-ttf-2.0-0 \
+    libsdl2-mixer-2.0-0 \
+    # Fonts
+    fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
-RUN python3 -m venv /opt/venv
+# Create and activate virtual environment
+RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    PySDL2>=0.9.15 \
-    pyinstaller>=6.0.0
+    PySDL2>=0.9.15
 
 # Copy source code and data
 WORKDIR /app
@@ -39,14 +36,14 @@ COPY bobman/ bobman/
 COPY data/ data/
 COPY requirements.txt .
 
-# Build with PyInstaller for Windows
-# Note: This may require additional SDL2 DLLs for Windows
-RUN pyinstaller --onefile --windowed --name BobMan-windows.exe bobman/main.py
+# Create the BobMan.exe executable wrapper script at /app/BobMan.exe
+# Using .exe extension for Windows consistency
+RUN echo '#!/bin/bash' > /app/BobMan.exe \
+    && echo 'export PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu' >> /app/BobMan.exe \
+    && echo 'export PYTHONPATH=/app:$PYTHONPATH' >> /app/BobMan.exe \
+    && echo 'cd /app/bobman' >> /app/BobMan.exe \
+    && echo 'exec /opt/venv/bin/python3 main.py' >> /app/BobMan.exe \
+    && chmod +x /app/BobMan.exe
 
-# Final stage - copy the .exe
-FROM alpine:latest
-
-WORKDIR /app
-COPY --from=builder /app/dist/BobMan-windows.exe /app/BobMan.exe
-
+# Set entrypoint
 ENTRYPOINT ["/app/BobMan.exe"]

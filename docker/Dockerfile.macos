@@ -1,29 +1,26 @@
-# Dockerfile for building BobMan Python on macOS
-# Note: True macOS Docker builds are difficult due to macOS licensing
-# This uses a Linux-based cross-compilation approach with osxcross
-# For best results, build natively on macOS
-# Phase 2: Resource Loading
+# Dockerfile for running BobMan Python on macOS (experimental)
+# Note: True macOS Docker builds are difficult due to macOS licensing.
+# This uses Linux with PySDL2 and may not produce a runnable macOS binary.
+# For best results, build natively on macOS.
+# Output: /app/BobMan (wrapper script)
 
-FROM python:3.11-slim as builder
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu \
+    PYTHONPATH=/app
 
-# Install dependencies (macOS SDL2 libraries via Homebrew in Docker would be ideal,
-# but we'll use Linux libraries and hope for compatibility)
+# Install system dependencies (Linux versions - may not be macOS compatible)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # SDL2 and related libraries (Linux versions)
-    libsdl2-dev \
-    libsdl2-image-dev \
-    libsdl2-ttf-dev \
-    libsdl2-mixer-dev \
-    # Build tools
-    gcc \
-    python3-dev \
-    python3-venv \
+    # SDL2 and related libraries
+    libsdl2-2.0-0 \
+    libsdl2-image-2.0-0 \
+    libsdl2-ttf-2.0-0 \
+    libsdl2-mixer-2.0-0 \
+    # Fonts
+    fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
 # Create and activate virtual environment
@@ -32,25 +29,21 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    PySDL2>=0.9.15 \
-    PySDL2-dll>=2.28.0 \
-    pyinstaller>=6.0.0
+    PySDL2>=0.9.15
 
-# Copy source code
+# Copy source code and data
 WORKDIR /app
 COPY bobman/ bobman/
 COPY data/ data/
 COPY requirements.txt .
 
-# Build with PyInstaller for macOS
-# Note: This produces a macOS .app bundle, but may not run on actual macOS
-# without proper code signing and macOS-specific SDL2 libraries
-RUN pyinstaller --onefile --windowed --name BobMan-mac bobman/main.py
+# Create the BobMan executable wrapper script at /app/BobMan
+RUN echo '#!/bin/bash' > /app/BobMan \
+    && echo 'export PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu' >> /app/BobMan \
+    && echo 'export PYTHONPATH=/app:$PYTHONPATH' >> /app/BobMan \
+    && echo 'cd /app/bobman' >> /app/BobMan \
+    && echo 'exec /opt/venv/bin/python3 main.py' >> /app/BobMan \
+    && chmod +x /app/BobMan
 
-# Final stage - minimal image
-FROM alpine:latest
-
-WORKDIR /app
-COPY --from=builder /app/dist/BobMan-mac /app/BobMan
-
+# Set entrypoint
 ENTRYPOINT ["/app/BobMan"]

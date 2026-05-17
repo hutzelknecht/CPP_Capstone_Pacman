@@ -1,6 +1,7 @@
 # Dockerfile for running BobMan Python on Linux
 # Phase 2: Resource Loading
 # Runs Python directly in container (no PyInstaller bundling needed)
+# Output: /app/BobMan (wrapper script that runs the Python app)
 
 FROM python:3.11-slim
 
@@ -35,16 +36,14 @@ COPY bobman/ bobman/
 COPY data/ data/
 COPY requirements.txt .
 
-# Set PYTHONPATH to include /app
-ENV PYTHONPATH=/app:$PYTHONPATH
+# Create the BobMan executable wrapper script at /app/BobMan
+# This matches what build-all.sh expects
+RUN echo '#!/bin/bash' > /app/BobMan \
+    && echo 'export PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu' >> /app/BobMan \
+    && echo 'export PYTHONPATH=/app:$PYTHONPATH' >> /app/BobMan \
+    && echo 'cd /app/bobman' >> /app/BobMan \
+    && echo 'exec /opt/venv/bin/python3 main.py' >> /app/BobMan \
+    && chmod +x /app/BobMan
 
-# Create a simple run script
-RUN echo '#!/bin/bash' > /app/run.sh \
-    && echo 'export PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu' >> /app/run.sh \
-    && echo 'export PYTHONPATH=/app:$PYTHONPATH' >> /app/run.sh \
-    && echo 'cd /app/bobman' >> /app/run.sh \
-    && echo 'exec python3 main.py' >> /app/run.sh \
-    && chmod +x /app/run.sh
-
-# Set entrypoint
-ENTRYPOINT ["/app/run.sh"]
+# Set entrypoint to match build-all.sh expectation
+ENTRYPOINT ["/app/BobMan"]

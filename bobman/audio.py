@@ -53,7 +53,21 @@ class Audio:
         self.music_volume = 64  # 0-128
         
         # Initialize SDL_mixer if not already initialized
-        if sdl2.sdlmixer.Mix_OpenedAudio() == 0:
+        # Check if audio is open by trying to query spec
+        # Mix_QuerySpec expects int*, Uint16*, int*
+        try:
+            freq = sdl2.c_int(0)
+            fmt = sdl2.c_uint16(0)
+            channels = sdl2.c_int(0)
+            audio_opened = sdl2.sdlmixer.Mix_QuerySpec(
+                sdl2.byref(freq),
+                sdl2.byref(fmt),
+                sdl2.byref(channels)
+            ) != 0
+        except:
+            audio_opened = False
+        
+        if not audio_opened:
             if sdl2.sdlmixer.Mix_OpenAudio(
                 44100,  # freq
                 sdl2.AUDIO_S16,  # format

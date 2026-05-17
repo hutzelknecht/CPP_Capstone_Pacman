@@ -138,6 +138,10 @@ class Renderer:
             print(f"Warning: Failed to load image {filepath}: {sdl2.SDL_GetError()}")
             return False
         
+        # Get surface dimensions before freeing
+        surf_w = surface.contents.w if hasattr(surface, 'contents') else (surface.w if hasattr(surface, 'w') else 0)
+        surf_h = surface.contents.h if hasattr(surface, 'contents') else (surface.h if hasattr(surface, 'h') else 0)
+        
         # Create texture from surface
         texture = sdl2.SDL_CreateTextureFromSurface(self.sdl_renderer, surface)
         sdl2.SDL_FreeSurface(surface)
@@ -150,7 +154,7 @@ class Renderer:
         sdl2.SDL_SetTextureBlendMode(texture, sdl2.SDL_BLENDMODE_BLEND)
         
         self.textures[name] = texture
-        print(f"  Loaded texture: {name} ({surface.w}x{surface.h})")
+        print(f"  Loaded texture: {name} ({surf_w}x{surf_h})")
         return True
     
     def get_texture(self, name: str) -> Optional[sdl2.SDL_Texture]:
@@ -407,7 +411,9 @@ class Renderer:
             print(f"Warning: Failed to create texture from text: {sdl2.SDL_GetError()}")
             return
         
-        rect = sdl2.SDL_Rect(x, y, surface.w, surface.h)
+        surf_w = surface.contents.w if hasattr(surface, 'contents') else (surface.w if hasattr(surface, 'w') else 0)
+        surf_h = surface.contents.h if hasattr(surface, 'contents') else (surface.h if hasattr(surface, 'h') else 0)
+        rect = sdl2.SDL_Rect(x, y, surf_w, surf_h)
         sdl2.SDL_RenderCopy(self.sdl_renderer, texture, None, rect)
         sdl2.SDL_DestroyTexture(texture)
     

@@ -1,0 +1,50 @@
+# Dockerfile for running BobMan Python on Linux
+# Phase 2: Resource Loading
+# Runs Python directly in container (no PyInstaller bundling needed)
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu \
+    PYTHONPATH=/app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # SDL2 and related libraries
+    libsdl2-2.0-0 \
+    libsdl2-image-2.0-0 \
+    libsdl2-ttf-2.0-0 \
+    libsdl2-mixer-2.0-0 \
+    # Fonts
+    fonts-freefont-ttf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create and activate virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    PySDL2>=0.9.15
+
+# Copy source code and data
+WORKDIR /app
+COPY bobman/ bobman/
+COPY data/ data/
+COPY requirements.txt .
+
+# Set PYTHONPATH to include /app
+ENV PYTHONPATH=/app:$PYTHONPATH
+
+# Create a simple run script
+RUN echo '#!/bin/bash' > /app/run.sh \
+    && echo 'export PYSDL2_DLL_PATH=/usr/lib/x86_64-linux-gnu' >> /app/run.sh \
+    && echo 'export PYTHONPATH=/app:$PYTHONPATH' >> /app/run.sh \
+    && echo 'cd /app/bobman' >> /app/run.sh \
+    && echo 'exec python3 main.py' >> /app/run.sh \
+    && chmod +x /app/run.sh
+
+# Set entrypoint
+ENTRYPOINT ["/app/run.sh"]

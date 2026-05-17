@@ -23,11 +23,11 @@ class Events:
     def __init__(self):
         """Initialize the events system."""
         self.quit = False
-        self.current_direction = Directions.None
+        self.current_direction = Directions.NONE
         self.gameplay_frozen = False
         
         # Request flags
-        self.requested_extra = ExtraSlot.None
+        self.requested_extra = ExtraSlot.NONE
         self.nuclear_test_requested = False
         self.nuclear_test_b_requested = False
         self.disco_test_requested = False
@@ -163,8 +163,8 @@ class Events:
         self.gameplay_frozen = frozen
         if frozen:
             # Reset all pending input when freezing
-            self.current_direction = Directions.None
-            self.requested_extra = ExtraSlot.None
+            self.current_direction = Directions.NONE
+            self.requested_extra = ExtraSlot.NONE
             self.nuclear_test_requested = False
             self.nuclear_test_b_requested = False
             self.disco_test_requested = False
@@ -178,7 +178,7 @@ class Events:
     
     def keyreset(self):
         """Reset the current direction (called after handling movement)."""
-        self.current_direction = Directions.None
+        self.current_direction = Directions.NONE
     
     def request_quit(self):
         """Request the application to quit."""
@@ -197,7 +197,7 @@ class Events:
         """Check and consume an extra use request."""
         if self.requested_extra != slot:
             return False
-        self.requested_extra = ExtraSlot.None
+        self.requested_extra = ExtraSlot.NONE
         return True
     
     def consume_cheat_request(self, slot: ExtraSlot) -> bool:

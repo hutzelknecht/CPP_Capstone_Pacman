@@ -98,7 +98,7 @@ class Colors:
 
 class Directions(Enum):
     """Movement directions for Pacman and monsters."""
-    None = 0
+    NONE = 0
     Up = 1
     Down = 2
     Left = 3
@@ -165,7 +165,7 @@ class MapCoord(NamedTuple):
 
 class ExtraSlot(Enum):
     """Inventory slots for special items."""
-    None = 0
+    NONE = 0
     Dynamite = 1
     PlasticExplosive = 2
     WalkieTalkie = 3

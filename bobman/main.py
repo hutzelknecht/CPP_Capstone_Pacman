@@ -9,6 +9,7 @@ Phase 2: Resource Loading - Full implementation with menu and game states
 import sys
 import os
 import time
+from typing import Optional
 import sdl2
 import sdl2.sdlttf
 import sdl2.sdlmixer
@@ -297,11 +298,14 @@ class App:
             return
         
         texture = sdl2.SDL_CreateTextureFromSurface(self.sdl_renderer, surface)
+        # Get surface dimensions before freeing
+        surface_w = surface.contents.w if hasattr(surface, 'contents') else surface.w
+        surface_h = surface.contents.h if hasattr(surface, 'contents') else surface.h
         sdl2.SDL_FreeSurface(surface)
         sdl2.sdlttf.TTF_CloseFont(font)
         
         if texture is not None:
-            rect = sdl2.SDL_Rect(x, y, surface.w, surface.h)
+            rect = sdl2.SDL_Rect(x, y, surface_w, surface_h)
             sdl2.SDL_RenderCopy(self.sdl_renderer, texture, None, rect)
             sdl2.SDL_DestroyTexture(texture)
     

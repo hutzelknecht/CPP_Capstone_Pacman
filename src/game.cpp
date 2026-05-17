@@ -686,9 +686,11 @@ void Game::AdjustDiscoRotationSpeed(double delta) {
 void Game::Update() {
   const Uint32 now = SDL_GetTicks();
   if (active_disco_easteregg.is_active) {
+    std::cerr << "DEBUG: Update() - disco easter egg already active, updating disco easter egg" << std::endl;
     UpdateDiscoEasterEgg(now);
     return;
   }
+  std::cerr << "DEBUG: Update() - disco easter egg not active, continuing normal update" << std::endl;
   CleanupEffects(now);
   UpdateScheduledMonsterBlasts(now);
   UpdateInvulnerability(now);
@@ -735,7 +737,14 @@ void Game::Update() {
   UpdateNuclearBombPickup(now);
   UpdateLovePotionPickup(now);
   UpdateLifePickup(now);
+  std::cerr << "DEBUG: About to call UpdateDiscoPickup, disco_pickup.is_visible=" << disco_pickup.is_visible << std::endl;
+  if (pacman != nullptr) {
+    std::cerr << "DEBUG: pacman coord=(" << pacman->map_coord.u << "," << pacman->map_coord.v << "), disco_pickup.coord=(" << disco_pickup.coord.u << "," << disco_pickup.coord.v << ")" << std::endl;
+  } else {
+    std::cerr << "DEBUG: pacman is nullptr!" << std::endl;
+  }
   UpdateDiscoPickup(now);
+  std::cerr << "DEBUG: UpdateDiscoPickup completed, active_disco_easteregg.is_active=" << active_disco_easteregg.is_active << std::endl;
   if (active_disco_easteregg.is_active) {
     return;
   }
@@ -1301,6 +1310,7 @@ void Game::ScheduleNextDiscoPickupSpawn(Uint32 now) {
       now + RandomScaledInterval(DISCO_PICKUP_SPAWN_MIN_INTERVAL_MS,
                                  DISCO_PICKUP_SPAWN_MAX_INTERVAL_MS,
                                  tuning.extra_spawn_interval_scale);
+  std::cerr << "DEBUG: Scheduled next disco pickup spawn at " << disco_pickup.next_spawn_ticks << " (now=" << now << ")" << std::endl;
 }
 
 bool Game::IsWithinRadius(MapCoord center, MapCoord target,
@@ -2733,6 +2743,7 @@ void Game::UpdateLifePickup(Uint32 now) {
 }
 
 void Game::TrySpawnDiscoPickup(Uint32 now) {
+  std::cerr << "DEBUG: TrySpawnDiscoPickup: is_visible=" << disco_pickup.is_visible << ", active_disco=" << active_disco_easteregg.is_active << ", now=" << now << ", next_spawn=" << disco_pickup.next_spawn_ticks << std::endl;
   if (disco_pickup.is_visible || active_disco_easteregg.is_active ||
       now < disco_pickup.next_spawn_ticks) {
     return;
@@ -2773,11 +2784,12 @@ void Game::TrySpawnDiscoPickup(Uint32 now) {
 
 void Game::UpdateDiscoPickup(Uint32 now) {
   TrySpawnDiscoPickup(now);
-  if (!disco_pickup.is_visible) {
+  if (!disco_pickup.is_visible || pacman == nullptr) {
     return;
   }
 
   if (SameCoord(pacman->map_coord, disco_pickup.coord)) {
+    std::cerr << "DEBUG: Disco pickup collected at (" << pacman->map_coord.u << "," << pacman->map_coord.v << ")" << std::endl;
 #ifdef AUDIO
     audio->PlayCoin();
 #endif
@@ -2785,7 +2797,9 @@ void Game::UpdateDiscoPickup(Uint32 now) {
     disco_pickup.is_fading = false;
     disco_pickup.fade_started_ticks = 0;
     ScheduleNextDiscoPickupSpawn(now);
+    std::cerr << "DEBUG: Starting disco easter egg..." << std::endl;
     StartDiscoEasterEgg(now);
+    std::cerr << "DEBUG: Disco easter egg started successfully" << std::endl;
     return;
   }
 
@@ -2805,10 +2819,17 @@ void Game::UpdateDiscoPickup(Uint32 now) {
 }
 
 void Game::StartDiscoEasterEgg(Uint32 now) {
-  if (active_disco_easteregg.is_active || events == nullptr) {
+  std::cerr << "DEBUG: StartDiscoEasterEgg called, now=" << now << std::endl;
+  std::cerr << "DEBUG: active_disco_easteregg.is_active=" << active_disco_easteregg.is_active << std::endl;
+  std::cerr << "DEBUG: events=" << (events == nullptr ? "nullptr" : "valid") << std::endl;
+  std::cerr << "DEBUG: pacman=" << (pacman == nullptr ? "nullptr" : "valid") << std::endl;
+  
+  if (active_disco_easteregg.is_active || events == nullptr || pacman == nullptr) {
+    std::cerr << "DEBUG: StartDiscoEasterEgg early return" << std::endl;
     return;
   }
 
+  std::cerr << "DEBUG: Initializing disco easter egg struct" << std::endl;
   active_disco_easteregg = {};
   active_disco_easteregg.is_active = true;
   active_disco_easteregg.started_ticks = now;
@@ -2816,19 +2837,25 @@ void Game::StartDiscoEasterEgg(Uint32 now) {
   active_disco_easteregg.last_rotation_update_ticks = now;
   active_disco_easteregg.rotation_phase_turns = 0.0;
   active_disco_easteregg.rotation_speed_scale = DISCO_ROTATION_SPEED_MIN;
+  
+  std::cerr << "DEBUG: Calculating animation seed with pacman coord (" << pacman->map_coord.u << "," << pacman->map_coord.v << ")" << std::endl;
   active_disco_easteregg.animation_seed =
       static_cast<int>((now % DISCO_EASTER_EGG_ANIMATION_SEED_MODULUS) +
                        pacman->map_coord.u *
                            DISCO_EASTER_EGG_ANIMATION_SEED_ROW_MULTIPLIER +
                        pacman->map_coord.v *
                            DISCO_EASTER_EGG_ANIMATION_SEED_COL_MULTIPLIER);
+  
+  std::cerr << "DEBUG: Setting gameplay frozen" << std::endl;
   events->SetGameplayFrozen(true);
   events->Keyreset();
 #ifdef AUDIO
+  std::cerr << "DEBUG: Starting disco music, audio=" << (audio == nullptr ? "nullptr" : "valid") << std::endl;
   if (audio != nullptr) {
     audio->StartDiscoMusic();
   }
 #endif
+  std::cerr << "DEBUG: StartDiscoEasterEgg completed" << std::endl;
 }
 
 void Game::UpdateDiscoRotationPhase(Uint32 now) {

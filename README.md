@@ -80,6 +80,18 @@ make -j$(nproc)
 ./BobMan
 ```
 
+### Static Linux executable
+
+To build a fully static Linux executable using Docker (includes all SDL2 libraries statically linked):
+
+```bash
+./build-linux-static.sh
+```
+
+The resulting static binary will be created at `build/BobMan-linux`.
+
+Note: This requires Docker and builds all dependencies (SDL2, SDL2_image, SDL2_ttf, SDL2_mixer) from source.
+
 ### macOS release artifact
 
 On macOS, `cmake --build --preset macos-app-release` now also creates a sanitized

@@ -2362,7 +2362,7 @@ void Renderer::renderFrame(bool show_hud) {
               push_depth_command(
                   depth,
                   [&, pacman_rect, pacman_texture, pacman_alpha,
-                   potion_invulnerable, delta_row_cells]() {
+                   potion_invulnerable, delta_row_cells, draw_slime_overlay]() {
                     drawWithWallOcclusion(
                         expandRect(pacman_rect, std::max(10, element_size / 3)),
                         static_cast<double>(game->pacman->map_coord.u) + 0.5 +

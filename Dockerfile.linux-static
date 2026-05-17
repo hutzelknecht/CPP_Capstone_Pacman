@@ -1,0 +1,189 @@
+# ─── Stage 1: build SDL2 family from source (static, minimal backends) ────────
+# Building from source lets us disable Wayland and KMS, which eliminates the
+# wl_proxy_* / drmMode* undefined-symbol avalanche that Ubuntu's pre-built
+# libsdl2.a triggers.
+FROM ubuntu:22.04 AS sdl2-build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake curl ca-certificates pkg-config \
+    # SDL2 X11 / input transitive deps
+    libx11-dev libxext-dev libxrandr-dev libxi-dev libxfixes-dev \
+    libxcursor-dev libxss-dev libxinerama-dev libxrender-dev \
+    libxcb1-dev libx11-xcb-dev \
+    # SDL2 audio transitive deps
+    libasound2-dev libpulse-dev libdbus-1-dev \
+    # SDL2_ttf transitive deps
+    libfreetype6-dev libharfbuzz-dev libfontconfig-dev \
+    # SDL2_image transitive deps
+    libpng-dev libjpeg-turbo8-dev libwebp-dev libtiff-dev zlib1g-dev \
+    # SDL2_mixer transitive deps
+    libvorbis-dev libogg-dev libflac-dev \
+    libopus-dev libopusfile-dev libsndfile1-dev libmpg123-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /sdl-src
+
+# SDL2 – static only, X11 backend, NO Wayland and NO KMS/DRM
+RUN curl -fsSL https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz \
+        | tar xz && \
+    cmake -S SDL2-2.28.5 -B build-sdl2 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+        -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_OFFSCREEN=OFF \
+        -DCMAKE_INSTALL_PREFIX=/opt/sdl2 && \
+    cmake --build build-sdl2 -j"$(nproc)" && \
+    cmake --install build-sdl2 && \
+    rm -rf SDL2-2.28.5 build-sdl2
+
+# SDL2_ttf – static, system freetype/harfbuzz
+RUN curl -fsSL https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-2.22.0.tar.gz \
+        | tar xz && \
+    cmake -S SDL2_ttf-2.22.0 -B build-sdl2ttf \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DSDL2TTF_HARFBUZZ=ON \
+        -DCMAKE_PREFIX_PATH=/opt/sdl2 \
+        -DCMAKE_INSTALL_PREFIX=/opt/sdl2 && \
+    cmake --build build-sdl2ttf -j"$(nproc)" && \
+    cmake --install build-sdl2ttf && \
+    rm -rf SDL2_ttf-2.22.0 build-sdl2ttf
+
+# SDL2_image – static, system image libs
+RUN curl -fsSL https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.2/SDL2_image-2.8.2.tar.gz \
+        | tar xz && \
+    cmake -S SDL2_image-2.8.2 -B build-sdl2image \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DSDL2IMAGE_VENDORED=OFF \
+        -DCMAKE_PREFIX_PATH=/opt/sdl2 \
+        -DCMAKE_INSTALL_PREFIX=/opt/sdl2 && \
+    cmake --build build-sdl2image -j"$(nproc)" && \
+    cmake --install build-sdl2image && \
+    rm -rf SDL2_image-2.8.2 build-sdl2image
+
+# SDL2_mixer – static, only Ogg/Vorbis + FLAC + Opus + MP3 (no MIDI, MOD, WavPack)
+RUN curl -fsSL https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.8.0/SDL2_mixer-2.8.0.tar.gz \
+        | tar xz && \
+    cmake -S SDL2_mixer-2.8.0 -B build-sdl2mixer \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DSDL2MIXER_MIDI=OFF \
+    -DSDL2MIXER_MOD=OFF \
+    -DSDL2MIXER_WAVPACK=OFF \
+    -DSDL2MIXER_VENDORED=OFF \
+    -DCMAKE_PREFIX_PATH=/opt/sdl2 \
+    -DCMAKE_INSTALL_PREFIX=/opt/sdl2 && \
+cmake --build build-sdl2mixer -j"$(nproc)" && \
+cmake --install build-sdl2mixer && \
+rm -rf SDL2_mixer-2.8.0 build-sdl2mixer
+
+# ─── Stage 2: build BobMan ────────────────────────────────────────────────────
+FROM sdl2-build AS builder
+
+# ─── Custom cmake find modules ────────────────────────────────────────────────
+# The project uses four old-style cmake variables (SDL2_LIBRARIES,
+# SDL2_IMAGE_LIBRARIES, SDL2TTF_LIBRARY, SDL2_MIXER_LIBRARIES) which expand
+# directly into target_link_libraries().  The linker processes that list left
+# to right, so an archive's transitive deps must come *after* it.
+#
+# Strategy: open a --start-group in SDL2_LIBRARIES and close it at the end of
+# SDL2_MIXER_LIBRARIES (the last entry in CMakeLists.txt's target_link_libraries
+# call).  Everything inside the group is re-scanned until all symbols resolve.
+RUN mkdir -p /cmake-static
+
+# FindSDL2.cmake – sets suffix preference, opens the linker group
+RUN cat > /cmake-static/FindSDL2.cmake << 'EOMOD'
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a;.so" CACHE STRING "" FORCE)
+find_path(SDL2_INCLUDE_DIR SDL.h PATH_SUFFIXES SDL2 include/SDL2 include)
+find_library(SDL2_LIBRARY_TEMP NAMES SDL2)
+if(SDL2_LIBRARY_TEMP)
+    set(SDL2_FOUND TRUE)
+    set(SDL2_INCLUDE_DIRS "${SDL2_INCLUDE_DIR}")
+    set(SDL2_LIBRARIES "-Wl,--start-group;${SDL2_LIBRARY_TEMP}")
+    mark_as_advanced(SDL2_LIBRARY_TEMP SDL2_INCLUDE_DIR)
+else()
+    set(SDL2_FOUND FALSE)
+endif()
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(SDL2 DEFAULT_MSG SDL2_LIBRARY_TEMP SDL2_INCLUDE_DIR)
+EOMOD
+
+# FindSDL2TTF.cmake
+RUN cat > /cmake-static/FindSDL2TTF.cmake << 'EOMOD'
+find_path(SDL2TTF_INCLUDE_DIR SDL_ttf.h PATH_SUFFIXES SDL2 include/SDL2 include)
+find_library(SDL2TTF_LIBRARY NAMES SDL2_ttf)
+if(SDL2TTF_LIBRARY)
+    set(SDL2TTF_FOUND TRUE)
+    mark_as_advanced(SDL2TTF_LIBRARY SDL2TTF_INCLUDE_DIR)
+else()
+    set(SDL2TTF_FOUND FALSE)
+endif()
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(SDL2TTF DEFAULT_MSG SDL2TTF_LIBRARY SDL2TTF_INCLUDE_DIR)
+EOMOD
+
+# FindSDL2_image.cmake
+RUN cat > /cmake-static/FindSDL2_image.cmake << 'EOMOD'
+find_path(SDL2_IMAGE_INCLUDE_DIR SDL_image.h PATH_SUFFIXES SDL2 include/SDL2 include)
+find_library(SDL2_IMAGE_LIBRARY NAMES SDL2_image)
+if(SDL2_IMAGE_LIBRARY)
+    set(SDL2_IMAGE_FOUND TRUE)
+    set(SDL2_IMAGE_INCLUDE_DIRS "${SDL2_IMAGE_INCLUDE_DIR}")
+    set(SDL2_IMAGE_LIBRARIES "${SDL2_IMAGE_LIBRARY}")
+    mark_as_advanced(SDL2_IMAGE_LIBRARY SDL2_IMAGE_INCLUDE_DIR)
+else()
+    set(SDL2_IMAGE_FOUND FALSE)
+endif()
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(SDL2_image DEFAULT_MSG SDL2_IMAGE_LIBRARY SDL2_IMAGE_INCLUDE_DIR)
+EOMOD
+
+# FindSDL2_mixer.cmake – appends transitive deps and closes the linker group.
+# The dep list is computed at Docker build time from the pkg-config files that
+# our source-built SDL2 installs; this reflects exactly the backends compiled in.
+RUN set -e && \
+    DEPS=$(PKG_CONFIG_PATH=/opt/sdl2/lib/pkgconfig \
+           pkg-config --static --libs sdl2 SDL2_ttf SDL2_image SDL2_mixer 2>/dev/null \
+           | tr ' ' '\n' \
+           | grep -Ev '^(-lSDL2|-pthread|^$)' \
+           | sort -u | tr '\n' ';' | sed 's/;$//') && \
+    printf 'find_path(SDL2_MIXER_INCLUDE_DIR SDL_mixer.h PATH_SUFFIXES SDL2 include/SDL2 include)\n' \
+        > /cmake-static/FindSDL2_mixer.cmake && \
+    printf 'find_library(SDL2_MIXER_LIBRARY NAMES SDL2_mixer)\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf 'if(SDL2_MIXER_LIBRARY)\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf '    set(SDL2_MIXER_FOUND TRUE)\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf '    set(SDL2_MIXER_INCLUDE_DIRS "${SDL2_MIXER_INCLUDE_DIR}")\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf '    set(SDL2_MIXER_LIBRARIES "${SDL2_MIXER_LIBRARY};%s;-Wl,--end-group")\n' "${DEPS}" \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf '    mark_as_advanced(SDL2_MIXER_LIBRARY SDL2_MIXER_INCLUDE_DIR)\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf 'else()\n    set(SDL2_MIXER_FOUND FALSE)\nendif()\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf 'include(FindPackageHandleStandardArgs)\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake && \
+    printf 'find_package_handle_standard_args(SDL2_mixer DEFAULT_MSG SDL2_MIXER_LIBRARY SDL2_MIXER_INCLUDE_DIR)\n' \
+        >> /cmake-static/FindSDL2_mixer.cmake
+
+# ─── Build BobMan ──────────────────────────────────────────────────────────────
+WORKDIR /src
+COPY . .
+
+RUN cmake -S . -B build/linux-static \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_MODULE_PATH=/cmake-static \
+        -DCMAKE_PREFIX_PATH=/opt/sdl2 \
+        -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -pthread" \
+    && cmake --build build/linux-static -- -j"$(nproc)"
+
+# ─── Stage 3: minimal output image ────────────────────────────────────────────
+FROM ubuntu:22.04 AS artifact
+RUN apt-get update && apt-get install -y --no-install-recommends binutils file \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /src/build/linux-static/BobMan /BobMan
+RUN file /BobMan && echo "---" && ldd /BobMan

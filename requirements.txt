@@ -1,0 +1,12 @@
+# BobMan Python - Dependencies
+# PySDL2 for SDL2 bindings
+PySDL2>=0.9.15
+PySDL2-dll>=2.28.0
+
+# Packaging
+pyinstaller>=6.0.0
+
+# Development
+black>=23.0
+flake8>=6.0
+mypy>=1.0

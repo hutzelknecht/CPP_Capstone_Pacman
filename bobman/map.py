@@ -2,6 +2,7 @@
 Map module - Handles map loading, parsing, and tile management.
 
 Ported from src/map.cpp and src/map.h
+Phase 2: Resource Loading - Full implementation
 """
 
 import os
@@ -11,6 +12,7 @@ from bobman.constants import (
     MAP_ROWS,
     MAP_COLS,
     WALL,
+    WALL_ALT,
     PATH,
     TELEPORT_1,
     TELEPORT_2,
@@ -39,12 +41,12 @@ class Map:
     - Accessing map data (walls, paths, entities)
     """
     
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str = ""):
         """
         Initialize the map.
         
         Args:
-            file_path: Path to the map file
+            file_path: Path to the map file (optional)
         """
         self.file_path = file_path
         self.display_name = ""
@@ -61,15 +63,25 @@ class Map:
         # Teleporters
         self.teleporter_pairs: Dict[str, List[MapCoord]] = {}
         
-        print(f"Map initialized: {file_path}")
+        # Auto-load if file path provided
+        if file_path:
+            self.load()
+        else:
+            print("Map initialized (no file loaded)")
     
-    def load(self) -> bool:
+    def load(self, file_path: str = "") -> bool:
         """
         Load the map from file.
         
+        Args:
+            file_path: Path to the map file (overrides self.file_path if provided)
+            
         Returns:
             True if loaded successfully, False otherwise
         """
+        if file_path:
+            self.file_path = file_path
+        
         if not os.path.exists(self.file_path):
             print(f"Error: Map file not found: {self.file_path}")
             return False
@@ -80,6 +92,15 @@ class Map:
         except Exception as e:
             print(f"Error reading map file: {e}")
             return False
+        
+        # Reset state
+        self.grid = []
+        self.display_name = ""
+        self.pacman_start = None
+        self.monster_starts = []
+        self.monster_chars = []
+        self.goodie_coords = []
+        self.teleporter_pairs = {}
         
         # First line is display name
         if lines:
@@ -97,6 +118,11 @@ class Map:
         self.rows = min(len(self.grid), MAP_ROWS)
         self.cols = MAP_COLS
         
+        # Pad rows if needed
+        while len(self.grid) < self.rows:
+            self.grid.append([' '] * self.cols)
+        
+        # Pad columns if needed
         for i in range(self.rows):
             while len(self.grid[i]) < self.cols:
                 self.grid[i].append(' ')  # Pad with spaces
@@ -108,6 +134,11 @@ class Map:
         self._find_teleporters()
         
         print(f"Map loaded: {self.cols}x{self.rows}, name='{self.display_name}'")
+        print(f"  Pacman start: {self.pacman_start}")
+        print(f"  Monsters: {len(self.monster_starts)}")
+        print(f"  Goodies: {len(self.goodie_coords)}")
+        print(f"  Teleporters: {len(self.teleporter_pairs)}")
+        
         return True
     
     def _find_entities(self):
@@ -151,9 +182,15 @@ class Map:
             return self.grid[coord.u][coord.v]
         return ' '  # Out of bounds = empty
     
+    def set_cell(self, coord: MapCoord, value: str):
+        """Set the character at a map coordinate."""
+        if 0 <= coord.u < self.rows and 0 <= coord.v < self.cols:
+            self.grid[coord.u][coord.v] = value
+    
     def is_wall(self, coord: MapCoord) -> bool:
         """Check if a coordinate is a wall."""
-        return self.get_cell(coord) == WALL
+        cell = self.get_cell(coord)
+        return cell == WALL or cell == WALL_ALT
     
     def is_path(self, coord: MapCoord) -> bool:
         """Check if a coordinate is a path."""
@@ -225,6 +262,22 @@ class Map:
                     coords.append(MapCoord(row, col))
         return coords
     
+    def find_free_coords(self) -> List[MapCoord]:
+        """Find all coordinates that are free (not walls, not occupied)."""
+        free = []
+        for row in range(self.rows):
+            for col in range(self.cols):
+                cell = self.grid[row][col]
+                # Free means path, teleporter, or empty space
+                if cell in ['.', ' ', '1', '2', '3', '4', '5', 'G']:
+                    free.append(MapCoord(row, col))
+        return free
+    
+    def is_coordinate_free(self, coord: MapCoord) -> bool:
+        """Check if a coordinate is free (not a wall)."""
+        cell = self.get_cell(coord)
+        return cell != WALL
+    
     @staticmethod
     def get_available_maps() -> List[Tuple[str, str]]:
         """
@@ -240,6 +293,14 @@ class Map:
         for filename in sorted(os.listdir(MAPS_DIR)):
             if filename.endswith('.txt') or filename.endswith('.map'):
                 filepath = os.path.join(MAPS_DIR, filename)
-                maps.append((filename, filepath))
+                # Try to read display name from first line
+                try:
+                    with open(filepath, 'r') as f:
+                        display_name = f.readline().strip()
+                    if not display_name:
+                        display_name = filename
+                except:
+                    display_name = filename
+                maps.append((display_name, filepath))
         
         return maps

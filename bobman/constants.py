@@ -17,9 +17,19 @@ from typing import NamedTuple
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 MAPS_DIR = os.path.join(DATA_DIR, "maps")
+FLOOR_TEXTURES_DIR = os.path.join(DATA_DIR, "floor_textures")
+PACMAN_FRAMES_DIR = os.path.join(DATA_DIR, "pacman_frames")
+MONSTER_FRAMES_DIR = os.path.join(DATA_DIR, "monster_frames")
 
 # Font paths
-FONT_PATH = os.path.join(DATA_DIR, "DejaVuSans.ttf")
+FONT_PATH = os.path.join(DATA_DIR, "font.ttf")
+
+# Texture paths
+PACMAN_SPRITE_PATH = os.path.join(DATA_DIR, "pacman.bmp")
+MONSTER_SPRITE_PATH = os.path.join(DATA_DIR, "monster.bmp")
+GOODIE_SPRITE_PATH = os.path.join(DATA_DIR, "goodie.bmp")
+BRICK_TEXTURE_PATH = os.path.join(DATA_DIR, "brick.bmp")
+TILE_TEXTURE_PATH = os.path.join(DATA_DIR, "tile.bmp")
 
 # Audio paths
 AUDIO_ENABLED = True  # Set to False to disable all audio
@@ -101,6 +111,7 @@ class Directions(Enum):
 
 # Wall
 WALL = "x"
+WALL_ALT = "z"  # Alternative wall character
 
 # Path
 PATH = "."
